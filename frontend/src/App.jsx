@@ -230,11 +230,12 @@ export default function App() {
       <div className="mx-auto flex max-w-[1480px]">
         {mobileSidebarOpen && <button className="fixed inset-0 top-14 z-40 bg-slate-900/30 md:hidden" onClick={() => setMobileSidebarOpen(false)} aria-label="Close navigation overlay" />}
         <aside className={`${mobileSidebarOpen ? "fixed bottom-0 left-0 top-14 z-50 flex w-64" : "hidden"} overflow-hidden flex-col shrink-0 border-r border-slate-200 bg-white px-3 py-4 transition-[width] duration-200 md:sticky md:top-14 md:z-auto md:flex md:h-[calc(100vh-3.5rem)] ${sidebarCollapsed ? "md:w-[68px]" : "md:w-56"}`}>
-          <div className={`mb-3 flex h-12 items-center border-b border-slate-200 pb-3 ${sidebarCollapsed ? "md:justify-center" : "justify-between px-2"}`}>
-            <p className={`whitespace-nowrap text-xs font-medium text-slate-500 transition-opacity duration-100 ${sidebarCollapsed ? "md:w-0 md:opacity-0" : "delay-150 opacity-100"}`}>Cloud workspace</p>
+          <div className={`relative mb-3 flex h-12 items-center border-b border-slate-200 pb-3 ${sidebarCollapsed ? "md:justify-center" : "justify-between px-2"}`}>
+            <p className={`whitespace-nowrap text-xs font-medium text-slate-500 transition-opacity duration-100 ${sidebarCollapsed ? "md:pointer-events-none md:absolute md:w-0 md:overflow-hidden md:opacity-0 md:invisible" : "delay-150 opacity-100"}`}>Cloud workspace</p>
             <button
+              type="button"
               onClick={toggleSidebar}
-              className="hidden h-8 w-8 shrink-0 place-items-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-800 md:grid"
+              className="relative z-10 hidden h-9 w-9 shrink-0 place-items-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-800 md:grid"
               aria-label={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"}
               title={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"}
             >
