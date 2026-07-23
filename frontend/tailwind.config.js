@@ -4,7 +4,7 @@ export default {
   theme: {
     extend: {
       colors: {
-        ink: "#0b0b17",
+        ink: "#061019",
       },
       keyframes: {
         "fade-in": {

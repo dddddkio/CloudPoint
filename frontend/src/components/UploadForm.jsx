@@ -1,92 +1,185 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { uploadPointCloud } from "../api.js";
+import { CheckIcon, UploadIcon } from "./Icons.jsx";
 
-export default function UploadForm({ onUploaded }) {
+const MAX_BYTES = 500 * 1024 * 1024;
+
+function formatBytes(bytes) {
+  return bytes >= 1024 * 1024
+    ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+export default function UploadForm({
+  embedded = false,
+  onCancel,
+  onBusyChange,
+  onUploaded,
+}) {
   const inputRef = useRef(null);
   const [file, setFile] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState("idle");
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
 
-  function pick(f) {
+  async function pick(candidate) {
     setError("");
-    if (f && !f.name.toLowerCase().endsWith(".las")) {
-      setError("Please choose a .las file.");
-      setFile(null);
+    setProgress(0);
+    setPhase("validating");
+    setFile(candidate ?? null);
+
+    if (!candidate) {
+      setPhase("idle");
       return;
     }
-    setFile(f ?? null);
+    if (!candidate.name.toLowerCase().endsWith(".las")) {
+      const message = "Choose an uncompressed .las file.";
+      setError(message);
+      setFile(null);
+      setPhase("error");
+      return;
+    }
+    if (!candidate.size || candidate.size > MAX_BYTES) {
+      const message = "The file must be smaller than 500 MB.";
+      setError(message);
+      setFile(null);
+      setPhase("error");
+      return;
+    }
+
+    try {
+      const signature = new TextDecoder().decode(await candidate.slice(0, 4).arrayBuffer());
+      if (signature !== "LASF") throw new Error("This file does not have a valid LAS signature.");
+      setPhase("ready");
+    } catch (err) {
+      setError(err.message || "The file could not be validated.");
+      setFile(null);
+      setPhase("error");
+    }
   }
 
   async function submit() {
-    if (!file) {
-      setError("Please choose a .las file first.");
-      return;
-    }
-    setBusy(true);
+    if (!file || phase !== "ready") return;
+    setPhase("uploading");
+    setProgress(0);
     setError("");
     try {
-      const created = await uploadPointCloud(file);
-      setFile(null);
-      if (inputRef.current) inputRef.current.value = "";
+      const created = await uploadPointCloud(file, setProgress);
+      setPhase("success");
       onUploaded?.(created);
+      setTimeout(() => {
+        setFile(null);
+        setProgress(0);
+        setPhase("idle");
+        if (inputRef.current) inputRef.current.value = "";
+      }, 1600);
     } catch (err) {
       setError(err.message);
-    } finally {
-      setBusy(false);
+      setPhase("error");
     }
   }
 
+  const busy = phase === "uploading" || phase === "validating";
+
+  useEffect(() => {
+    onBusyChange?.(busy);
+  }, [busy, onBusyChange]);
+
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
-        Upload
-      </h2>
+    <div className={embedded ? "bg-white" : "rounded-lg border border-slate-200 bg-white"}>
+      {!embedded && <div className="border-b border-slate-200 px-5 py-4">
+        <h2 className="text-base font-medium text-slate-900">Upload point cloud</h2>
+        <p className="mt-1 text-sm text-slate-500">LAS files are validated before upload.</p>
+      </div>}
 
-      <div
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragging(false);
-          pick(e.dataTransfer.files?.[0]);
-        }}
-        onClick={() => inputRef.current?.click()}
-        className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-6 py-8 text-center transition
-          ${dragging ? "border-indigo-400 bg-indigo-50" : "border-slate-300 hover:border-indigo-300 hover:bg-slate-50"}`}
-      >
-        <svg className="h-8 w-8 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9m0 0-3 3m3-3 3 3M6.75 19.5a4.5 4.5 0 0 1-1.41-8.775 5.25 5.25 0 0 1 10.233-2.33 3 3 0 0 1 3.758 3.848A3.752 3.752 0 0 1 18 19.5H6.75Z" />
-        </svg>
-        {file ? (
-          <p className="text-sm font-medium text-slate-700">{file.name}</p>
-        ) : (
-          <p className="text-sm text-slate-500">
-            Drag & drop a <span className="font-medium">.las</span> file, or click to browse
-          </p>
-        )}
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".las"
-          className="hidden"
-          onChange={(e) => pick(e.target.files?.[0])}
-        />
-      </div>
-
-      <div className="mt-4 flex items-center justify-between gap-3">
-        <p className="text-sm text-rose-600">{error}</p>
-        <button
-          onClick={submit}
-          disabled={busy || !file}
-          className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+      <div className="p-5">
+        <div
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setDragging(false);
+            void pick(event.dataTransfer.files?.[0]);
+          }}
+          className={`rounded-lg border-2 border-dashed p-6 text-center transition ${
+            dragging ? "border-blue-500 bg-blue-50" : "border-slate-300 bg-slate-50/60"
+          }`}
         >
-          {busy && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />}
-          {busy ? "Uploading…" : "Upload"}
-        </button>
+          <div className="mx-auto grid h-10 w-10 place-items-center rounded-full bg-blue-50 text-blue-600">
+            {busy ? (
+              <span className="h-5 w-5 animate-spin rounded-full border-2 border-blue-200 border-t-blue-600" />
+            ) : phase === "success" ? (
+              <CheckIcon className="h-5 w-5 text-emerald-600" />
+            ) : (
+              <UploadIcon className="h-5 w-5" />
+            )}
+          </div>
+
+          {file ? (
+            <div className="mt-3">
+              <p className="truncate text-sm font-medium text-slate-800" title={file.name}>{file.name}</p>
+              <p className="mt-1 text-xs text-slate-500">
+                {formatBytes(file.size)}
+                {phase === "ready" && <span className="ml-2 text-emerald-700">Validated</span>}
+              </p>
+            </div>
+          ) : (
+            <div className="mt-3">
+              <p className="text-sm text-slate-700">Drag and drop a LAS file here</p>
+              <p className="mt-1 text-xs text-slate-500">or select a file from your computer</p>
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={() => !busy && inputRef.current?.click()}
+            disabled={busy}
+            className="mt-4 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
+          >
+            Choose file
+          </button>
+          <input ref={inputRef} type="file" accept=".las" className="hidden" onChange={(event) => void pick(event.target.files?.[0])} />
+        </div>
+
+        {(phase === "uploading" || phase === "success") && (
+          <div className="mt-4">
+            <div className="mb-2 flex justify-between text-xs text-slate-600">
+              <span>{phase === "success" ? "Upload complete" : "Uploading"}</span>
+              <span>{progress}%</span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
+              <div className="h-full rounded-full bg-blue-600 transition-all duration-300" style={{ width: `${progress}%` }} />
+            </div>
+          </div>
+        )}
+
+        {error && <div className="mt-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</div>}
+
+        <div className="mt-5 flex items-center justify-between gap-3">
+          <span className="text-xs text-slate-500">Maximum file size: 500 MB</span>
+          <div className="flex items-center gap-2">
+            {onCancel && (
+              <button
+                onClick={onCancel}
+                disabled={busy}
+                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Cancel
+              </button>
+            )}
+            <button
+              onClick={submit}
+              disabled={phase !== "ready"}
+              className="rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+            >
+              Upload
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
