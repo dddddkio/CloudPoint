@@ -167,9 +167,13 @@ CF_ACCESS_AUDIENCE=your-application-aud-tag
 
 The recommended deployment exposes both the SPA and `/api/*` on one protected
 hostname. `VITE_API_BASE` is empty in that setup, so browser requests are
-same-origin and automatically include the Access cookie. Publish the origin
-through Cloudflare Tunnel (or otherwise restrict the origin) so its public IP
-cannot bypass Access.
+same-origin and automatically include the Access cookie. On Zeabur, the
+project Gateway sends the public hostname to the frontend Caddy service.
+That service serves the SPA and proxies `/api/*` plus `/health/*` over
+Zeabur private networking to FastAPI. The backend therefore needs no public
+domain, and it independently validates the Access assertion forwarded by
+Caddy. See `docs/zeabur-deployment.md` for the complete service topology and
+configuration.
 
 For local development only, set `ENVIRONMENT=development` and
 `AUTH_MODE=development`. This creates a clearly labelled local reviewer

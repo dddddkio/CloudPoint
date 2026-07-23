@@ -1,0 +1,25 @@
+:{$PORT:8080} {
+	encode zstd gzip
+
+	# Cloudflare Access adds Cf-Access-Jwt-Assertion at the public edge.
+	# Caddy preserves it while proxying these same-origin routes to FastAPI.
+	@backend path /api/* /health /health/*
+	handle @backend {
+		reverse_proxy {$BACKEND_UPSTREAM}
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+	}
+
+	log
+}
