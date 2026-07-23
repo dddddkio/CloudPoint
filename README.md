@@ -42,6 +42,7 @@ CloudPoint/
 │   │   ├── schemas.py        # API contract
 │   │   ├── las.py            # ★ LAS validation & metadata (core logic)
 │   │   ├── storage.py        # MinIO wrapper (put / presigned GET)
+│   │   ├── security.py       # Cloudflare Access JWT validation
 │   │   ├── db_migrate.py     # runs Alembic upgrade on startup
 │   │   └── routers/point_clouds.py  # upload / list / detail / download-url
 │   ├── alembic.ini           # migration config (no secrets — URL from .env)
@@ -53,7 +54,7 @@ CloudPoint/
     └── src/
         ├── App.jsx, api.js
         ├── lib/lasLoader.js   # ★ browser LAS parser (positions + RGB)
-        └── components/{UploadForm,PointCloudList,PointCloudViewer}.jsx
+        └── components/{UploadDialog,UploadForm,PointCloudList,PointCloudViewer}.jsx
 ```
 
 ## 3. Install, configure & run
@@ -94,13 +95,91 @@ presigned MinIO URL → browser fetches the raw `.las`, parses it
 (`lib/lasLoader.js`) and renders it with Three.js. The backend never streams
 the binary itself — the browser pulls it straight from object storage.
 
+The UI follows a resource-oriented flow: `Workspace` provides status and
+recent activity, `Point clouds` is the single file library, and selecting a
+file opens its `3D workspace`. Upload is a contextual library dialog rather
+than a top-level page. Download is a contextual action on the selected file
+and requests an attachment-disposition presigned URL.
+
 | Method | Path                              | Purpose |
 |--------|-----------------------------------|---------|
 | POST   | `/api/point-clouds`               | Upload & validate a LAS file |
 | GET    | `/api/point-clouds`               | List all records |
 | GET    | `/api/point-clouds/{id}`          | Single record + bbox |
 | GET    | `/api/point-clouds/{id}/download-url` | Presigned MinIO URL |
-| GET    | `/health`                         | Liveness |
+| GET    | `/api/session`                    | Current Cloudflare Access identity |
+| GET    | `/`                               | Service metadata + useful links |
+| GET    | `/health` / `/health/live`        | Process liveness |
+| GET    | `/health/ready`                   | PostgreSQL + MinIO readiness |
+
+### Service logging & request tracing
+
+The backend writes one structured JSON object per line by default. Every HTTP
+request produces an access log with `request_id`, method, path, status code,
+duration and client IP. Clients may supply `X-Request-ID`; otherwise the server
+generates one. The same ID is returned in the response header and in safe 500
+responses, so an error reported by a user can be matched to its server log.
+
+Operational response headers include `X-Request-ID`, `X-Process-Time-Ms` and
+basic browser hardening headers. Unhandled exceptions are logged with a stack
+trace while the API response omits internal details.
+
+Logging is environment-driven:
+
+```dotenv
+APP_NAME=CloudPoint API
+APP_VERSION=0.1.0
+ENVIRONMENT=development
+LOG_LEVEL=INFO
+LOG_FORMAT=json  # use text for human-friendly local output
+```
+
+`/health/live` only checks the API process. `/health/ready` returns HTTP 200
+when both PostgreSQL and the configured MinIO bucket are reachable, otherwise
+HTTP 503 with a per-dependency status. This split is suitable for container
+liveness and readiness probes.
+
+### Cloudflare Access authentication
+
+Production uses Cloudflare Access as the identity-aware proxy. The reviewer
+opens the normal application URL, completes the email policy configured in
+Cloudflare Zero Trust, and receives Cloudflare's `HttpOnly`
+`CF_Authorization` application cookie. The frontend does not read this cookie
+and does not contain an invitation token or API secret.
+
+Cloudflare adds `Cf-Access-Jwt-Assertion` when forwarding authenticated
+requests to the origin. Every `/api/point-clouds` route and `/api/session`
+validates that JWT again at the FastAPI layer:
+
+- RS256 signature against the team's rotating JWKS;
+- exact Cloudflare team issuer;
+- exact Access application Audience (`AUD`);
+- token lifetime and required subject/email claims.
+
+Production configuration:
+
+```dotenv
+ENVIRONMENT=production
+AUTH_MODE=cloudflare_access
+CF_ACCESS_TEAM_DOMAIN=https://your-team.cloudflareaccess.com
+CF_ACCESS_AUDIENCE=your-application-aud-tag
+```
+
+The recommended deployment exposes both the SPA and `/api/*` on one protected
+hostname. `VITE_API_BASE` is empty in that setup, so browser requests are
+same-origin and automatically include the Access cookie. Publish the origin
+through Cloudflare Tunnel (or otherwise restrict the origin) so its public IP
+cannot bypass Access.
+
+For local development only, set `ENVIRONMENT=development` and
+`AUTH_MODE=development`. This creates a clearly labelled local reviewer
+identity without requiring Cloudflare. The backend refuses this mode when
+`ENVIRONMENT` is not `development`.
+
+Note that CORS does not authenticate a frontend. A user who has legitimately
+passed the Access email policy can call the API with their own valid session;
+the security guarantee is authenticated reviewer identity and an unreachable
+origin, not that requests were produced by a particular JavaScript bundle.
 
 ## 5. Database & file storage design
 
@@ -137,7 +216,7 @@ truncated files. This proves a file is genuinely LAS rather than trusting its
 extension.
 
 ```bash
-cd backend && source .venv/bin/activate && pytest -q   # 7 passing
+cd backend && source .venv/bin/activate && pytest -q   # 20 passing
 ```
 
 ## 7. Known issues, tradeoffs & next steps
@@ -160,9 +239,12 @@ cd backend && source .venv/bin/activate && pytest -q   # 7 passing
   dedicated migration step in the deploy pipeline is safer at scale.
 - **Whole-file read into memory** on upload — fine for the brief's scale;
   streaming/multipart-to-MinIO would scale better.
-- No auth/multi-tenancy — out of scope.
+- **Cloudflare Access owns login and session policy.** The application does
+  not maintain passwords or a persistent session table; authorization beyond
+  the current reviewer role would need application-level roles or groups.
 
 ## Assumptions
-- Single-user, trusted environment (no auth).
+- Reviewer email allow-list and session policy are configured in Cloudflare
+  Access; the API independently validates the resulting application JWT.
 - LAS 1.0–1.4; LAZ (compressed) not handled.
 - Infra credentials supplied via environment; nothing sensitive is committed.
