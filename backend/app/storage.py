@@ -45,10 +45,17 @@ def put_bytes(object_key: str, data: bytes, content_type: str = "application/oct
     )
 
 
-def presigned_get(object_key: str, expires_seconds: int = 3600) -> str:
+def presigned_get(
+    object_key: str,
+    expires_seconds: int = 3600,
+    response_headers: dict[str, str] | None = None,
+) -> str:
     """Return a temporary download URL the browser can fetch directly."""
     from datetime import timedelta
 
     return get_client().presigned_get_object(
-        settings.minio_bucket, object_key, expires=timedelta(seconds=expires_seconds)
+        settings.minio_bucket,
+        object_key,
+        expires=timedelta(seconds=expires_seconds),
+        response_headers=response_headers,
     )

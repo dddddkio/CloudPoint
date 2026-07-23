@@ -15,4 +15,6 @@ def upgrade_to_head() -> None:
     cfg = Config(str(_BACKEND_DIR / "alembic.ini"))
     # Use absolute paths so this works regardless of the process CWD.
     cfg.set_main_option("script_location", str(_BACKEND_DIR / "migrations"))
+    # The running application already owns logging configuration.
+    cfg.attributes["skip_logging_config"] = True
     command.upgrade(cfg, "head")

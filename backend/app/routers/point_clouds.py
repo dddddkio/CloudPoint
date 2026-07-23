@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import uuid
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -13,8 +14,13 @@ from ..database import get_db
 from ..las import InvalidLasError, parse_las_header
 from ..models import PointCloud
 from ..schemas import BoundingBox, PointCloudOut
+from ..security import require_access_identity
 
-router = APIRouter(prefix="/api/point-clouds", tags=["point-clouds"])
+router = APIRouter(
+    prefix="/api/point-clouds",
+    tags=["point-clouds"],
+    dependencies=[Depends(require_access_identity)],
+)
 settings = get_settings()
 
 _HEADER_PROBE_BYTES = 4096  # enough to cover any LAS public header + VLR start
@@ -88,9 +94,26 @@ def get_point_cloud(cloud_id: str, db: Session = Depends(get_db)) -> PointCloudO
 
 
 @router.get("/{cloud_id}/download-url")
-def get_download_url(cloud_id: str, db: Session = Depends(get_db)) -> dict[str, str]:
+def get_download_url(
+    cloud_id: str,
+    download: bool = Query(False),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
     """Temporary presigned URL for the raw LAS (used by the viewer/fallback)."""
     pc = db.get(PointCloud, cloud_id)
     if pc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Point cloud not found.")
-    return {"url": storage.presigned_get(pc.raw_object_key)}
+    response_headers = None
+    if download:
+        encoded_name = quote(pc.original_filename, safe="")
+        response_headers = {
+            "response-content-disposition": (
+                f"attachment; filename*=UTF-8''{encoded_name}"
+            )
+        }
+    return {
+        "url": storage.presigned_get(
+            pc.raw_object_key,
+            response_headers=response_headers,
+        )
+    }

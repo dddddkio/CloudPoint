@@ -20,8 +20,8 @@ config = context.config
 # Inject the real DB URL from settings (never hard-coded in alembic.ini).
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+if config.config_file_name is not None and not config.attributes.get("skip_logging_config"):
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
