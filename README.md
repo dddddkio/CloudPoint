@@ -1,198 +1,185 @@
 # CloudPoint — 简易点云上传平台
 
-Upload LAS point clouds through the browser, validate & store them, record
-metadata in PostgreSQL, and view them online in a Three.js WebGL viewer
-(RGB + rotate / zoom / pan).
+CloudPoint 是一个基于浏览器的 LAS 点云管理平台，支持文件校验与存储、PostgreSQL 元数据管理，以及基于 Three.js WebGL 的在线点云查看。查看器支持 RGB 与高程着色，并提供旋转、缩放和平移等操作。
 
-Full flow: **上传点云 → 校验 → 存文件(MinIO) → 记录元数据(PostgreSQL) → 前端列表 → 浏览器在线查看**.
+完整流程：**上传点云 → 校验文件 → 存入 MinIO → 记录 PostgreSQL 元数据 → 前端资源库 → 浏览器在线查看**。
 
 ---
 
-## Live demo
+## 在线演示
 
-**[Open the protected CloudPoint workspace](https://cloudpoint-access-gateway.linxin5661.workers.dev/)**
+**[打开受保护的 CloudPoint 工作台](https://cloudpoint-access-gateway.linxin5661.workers.dev/)**
 
-The production workspace is protected by Cloudflare Access. Reviewers must use
-an email address included in the Access policy.
+生产环境由 Cloudflare Access 保护。访问者需要使用已加入访问策略的邮箱，通过邮箱验证码登录。
 
-![CloudPoint 30-second product walkthrough](docs/assets/cloudpoint-demo.gif)
+![CloudPoint 30 秒产品演示](docs/assets/cloudpoint-demo.gif)
 
-### Production architecture
+### 生产架构
 
 ```mermaid
 flowchart LR
-    Reviewer["Reviewer browser"] --> Access["Cloudflare Access<br/>email policy"]
-    Access --> Worker["Cloudflare Worker<br/>Access gateway"]
-    Worker --> Web["Zeabur web service<br/>Caddy + React SPA"]
-    Web -->|"same-origin /api + /health"| API["Zeabur API service<br/>FastAPI"]
-    API --> PG[("PostgreSQL<br/>metadata")]
-    API --> MinIO[("MinIO<br/>raw LAS objects")]
-    Reviewer -. "presigned GET" .-> MinIO
+    Reviewer["考核者浏览器"] --> Access["Cloudflare Access<br/>邮箱访问策略"]
+    Access --> Worker["Cloudflare Worker<br/>访问网关"]
+    Worker --> Web["Zeabur 前端服务<br/>Caddy + React SPA"]
+    Web -->|"同源 /api 与 /health"| API["Zeabur 后端服务<br/>FastAPI"]
+    API --> PG[("PostgreSQL<br/>元数据")]
+    API --> MinIO[("MinIO<br/>LAS 原始文件")]
+    Reviewer -. "预签名地址下载" .-> MinIO
 ```
 
-## 1. Tech stack & why
+## 1. 技术栈与选型
 
-| Layer     | Choice                     | Why |
-|-----------|----------------------------|-----|
-| Frontend  | React + Vite + TailwindCSS | Fast dev server, utility-first styling |
-| Viewer    | Three.js                   | Renders the raw `.las` directly in-browser — RGB + OrbitControls (rotate/zoom/pan), no server-side preprocessing |
-| Backend   | FastAPI                    | Typed, async, auto OpenAPI docs; concise validation & tests |
-| Database  | PostgreSQL (SQLAlchemy 2)  | Robust relational store for metadata |
-| Storage   | MinIO (S3-compatible)      | Keeps large binaries **out of the DB** (brief requirement) |
-| LAS parse | Custom header parser + laspy | Cheap, testable header-level validation |
+| 层级 | 技术选型 | 选型原因 |
+|------|----------|----------|
+| 前端 | React + Vite + Tailwind CSS | 开发与构建速度快，适合构建结构清晰的工作台界面 |
+| 三维查看器 | Three.js | 可在浏览器中直接渲染 LAS 数据，支持 RGB、旋转、缩放和平移 |
+| 后端 | FastAPI | 类型明确、异步支持良好，并自动生成 OpenAPI 文档 |
+| 数据库 | PostgreSQL + SQLAlchemy 2 | 用于可靠地保存点云元数据 |
+| 对象存储 | MinIO（兼容 S3） | 将大型二进制文件与关系数据库分离 |
+| LAS 解析 | 自定义头部解析器 + laspy | 校验成本低、便于测试，也方便后续扩展 |
 
-**Monorepo** (`backend/` + `frontend/`): one clone, one README, one API
-contract. Small project → no benefit to splitting repos.
+项目采用单体仓库结构，后端位于 `backend/`，前端位于 `frontend/`。对于当前规模，一个仓库可以统一维护版本、文档和 API 契约，交付和审阅也更直观。
 
-**Why Three.js over Potree?** Potree gives streaming LOD but requires
-`PotreeConverter` (a C++ binary, Windows-only prebuilds) to pre-process each
-LAS into octree tiles — heavy to run and verify on macOS/ARM. For the scale in
-this brief, parsing the raw `.las` in the browser and rendering with Three.js
-delivers the required RGB + orbit controls with no preprocessing step. The
-tradeoff: very large clouds are subsampled client-side (see §7).
+### 为什么选择 Three.js
 
-## 2. Project structure
+Potree 支持流式层级细节加载，但需要先使用 `PotreeConverter` 将 LAS 转换为八叉树切片。该预处理链路较重，并且在 macOS ARM 环境下不便验证。
 
-```
+本项目直接在浏览器中解析并渲染原始 `.las` 文件，不需要服务端预处理即可满足 RGB 显示和轨道控制要求。对于超过浏览器渲染上限的点云，前端会进行均匀降采样。更大规模场景的演进方案见“已知限制与后续优化”。
+
+## 2. 项目结构
+
+```text
 CloudPoint/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py           # FastAPI app + CORS + table bootstrap
-│   │   ├── config.py         # env-driven settings (no hard-coded secrets)
-│   │   ├── database.py       # SQLAlchemy engine/session
-│   │   ├── models.py         # PointCloud metadata table
-│   │   ├── schemas.py        # API contract
-│   │   ├── las.py            # ★ LAS validation & metadata (core logic)
-│   │   ├── storage.py        # MinIO wrapper (put / delete / presigned GET)
-│   │   ├── security.py       # Cloudflare Access JWT validation
-│   │   ├── db_migrate.py     # runs Alembic upgrade on startup
-│   │   └── routers/point_clouds.py  # upload / list / detail / download / delete
-│   ├── alembic.ini           # migration config (no secrets — URL from .env)
-│   ├── migrations/           # ★ every schema change recorded here
-│   │   ├── env.py
-│   │   └── versions/         # one file per migration, chronological
-│   └── tests/                # LAS + auth + health + lifecycle tests
+│   │   ├── main.py           # FastAPI 应用、CORS 与服务初始化
+│   │   ├── config.py         # 环境变量配置，不硬编码敏感信息
+│   │   ├── database.py       # SQLAlchemy 数据库连接与会话
+│   │   ├── models.py         # PointCloud 元数据模型
+│   │   ├── schemas.py        # API 数据契约
+│   │   ├── las.py            # LAS 完整性校验与元数据提取
+│   │   ├── storage.py        # MinIO 上传、删除与预签名地址
+│   │   ├── security.py       # Cloudflare Access JWT 校验
+│   │   ├── db_migrate.py     # 启动时执行 Alembic 迁移
+│   │   └── routers/point_clouds.py  # 上传、查询、下载与删除接口
+│   ├── alembic.ini           # 数据库迁移配置
+│   ├── migrations/           # 数据库结构变更记录
+│   └── tests/                # LAS、鉴权、健康检查和生命周期测试
 ├── cloudflare/
-│   └── worker.js             # Access-protected reverse proxy to Zeabur
+│   └── worker.js             # 受 Access 保护的 Zeabur 反向代理
 ├── docs/
 │   ├── assets/cloudpoint-demo.gif
 │   └── zeabur-deployment.md
 └── frontend/
     └── src/
         ├── App.jsx, api.js
-        ├── lib/lasLoader.js   # ★ browser LAS parser (positions + RGB)
-        └── components/        # upload, delete, library and lazy 3D workspace
+        ├── lib/lasLoader.js  # 浏览器端 LAS 坐标与 RGB 解析
+        └── components/       # 上传、删除、资源库和三维工作区组件
 ```
 
-## 3. Install, configure & run
+## 3. 本地安装与运行
 
-### Prerequisites
-Python 3.11–3.13 (3.14 lacks binary wheels for some deps at time of writing),
-Node 18+, and a reachable PostgreSQL + MinIO (S3-compatible) instance.
-Connection strings are supplied via `backend/.env`.
+### 环境要求
 
-PostgreSQL and MinIO are provided externally; point `backend/.env` at them.
+- Python 3.11–3.13
+- Node.js 18 或更高版本
+- 可访问的 PostgreSQL 实例
+- 可访问的 MinIO 或其他兼容 S3 的对象存储
 
-### a) Backend
+数据库和对象存储连接信息通过 `backend/.env` 提供。
+
+### 启动后端
+
 ```bash
 cd backend
-cp .env.example .env          # point DATABASE_URL / MINIO_* at your infra
-python -m venv .venv && source .venv/bin/activate
+cp .env.example .env          # 配置 DATABASE_URL 与 MINIO_*
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload # http://localhost:8000  (docs at /docs)
+uvicorn app.main:app --reload # 服务地址：http://localhost:8000
 ```
 
-### b) Frontend
+OpenAPI 文档地址：`http://localhost:8000/docs`
+
+### 启动前端
+
 ```bash
 cd frontend
-cp .env.example .env          # VITE_API_BASE=http://localhost:8000
+cp .env.example .env          # 本地开发可设置 VITE_API_BASE=http://localhost:8000
 npm install
-npm run dev                   # http://localhost:5173
+npm run dev                   # 页面地址：http://localhost:5173
 ```
 
-## 4. Data flow & API
+## 4. 数据流程与 API
 
-Upload: browser `POST /api/point-clouds` (multipart) → backend reads bytes →
-`parse_las_header` validates → raw LAS stored in MinIO under `<id>/raw/<name>`
-→ metadata row inserted → JSON returned. If the database write fails after
-object upload, the just-written object is removed before the error is returned.
-**The binary is never written to the DB** — only object keys.
+### 上传流程
 
-View: browser `GET /{id}/download-url` → backend returns a short-lived
-presigned MinIO URL → browser fetches the raw `.las`, parses it
-(`lib/lasLoader.js`) and renders it with Three.js. The backend never streams
-the binary itself — the browser pulls it straight from object storage.
+浏览器通过 `POST /api/point-clouds` 上传文件，后端读取文件并调用 `parse_las_header` 校验 LAS 结构。校验通过后，原始文件存入 MinIO 的 `<id>/raw/<文件名>` 路径，再将元数据写入 PostgreSQL。
 
-The UI follows a resource-oriented flow: `Workspace` provides status and
-recent activity, `Point clouds` is the single file library, and selecting a
-file opens its `3D workspace`. Upload is a contextual library dialog rather
-than a top-level page. Download is a contextual action on the selected file
-and requests an attachment-disposition presigned URL.
+如果对象已经写入 MinIO，但数据库提交失败，后端会回滚事务并清理刚写入的对象，避免产生孤立文件。数据库仅保存对象键和点云元数据，不保存 LAS 二进制内容。
 
-Delete is initiated only from the library and requires explicit confirmation.
-The backend removes the MinIO object before deleting its metadata row; if
-storage deletion fails, the database record is preserved so the failure stays
-visible and can be retried.
+### 查看流程
 
-| Method | Path                              | Purpose |
-|--------|-----------------------------------|---------|
-| POST   | `/api/point-clouds`               | Upload & validate a LAS file |
-| GET    | `/api/point-clouds`               | List all records |
-| GET    | `/api/point-clouds/{id}`          | Single record + bbox |
-| GET    | `/api/point-clouds/{id}/download-url` | Presigned MinIO URL |
-| DELETE | `/api/point-clouds/{id}`          | Delete MinIO object + metadata |
-| GET    | `/api/session`                    | Identity + server upload limit |
-| GET    | `/`                               | Service metadata + useful links |
-| GET    | `/health` / `/health/live`        | Process liveness |
-| GET    | `/health/ready`                   | PostgreSQL + MinIO readiness |
+浏览器请求 `/api/point-clouds/{id}/download-url`，后端返回短时有效的 MinIO 预签名地址。前端直接下载原始 LAS 文件，通过 `lib/lasLoader.js` 解析坐标和颜色，再交给 Three.js 渲染。后端不转发文件内容，因此不会成为大文件下载链路中的额外带宽节点。
 
-### Service logging & request tracing
+### 页面操作逻辑
 
-The backend writes one structured JSON object per line by default. Every HTTP
-request produces an access log with `request_id`, method, path, status code,
-duration and client IP. Clients may supply `X-Request-ID`; otherwise the server
-generates one. The same ID is returned in the response header and in safe 500
-responses, so an error reported by a user can be matched to its server log.
+- `Workspace`：展示服务状态、数据统计、最近文件和快捷操作。
+- `Point clouds`：统一管理 LAS 文件，支持搜索、上传、查看和删除。
+- `3D workspace`：专注于当前文件的点云查看、显示设置和下载。
 
-Operational response headers include `X-Request-ID`, `X-Process-Time-Ms` and
-basic browser hardening headers. Unhandled exceptions are logged with a stack
-trace while the API response omits internal details.
+上传通过资源库中的对话框完成，不设置独立导航页面。下载属于当前文件的上下文操作。删除只能从资源库发起，并且需要二次确认。
 
-Logging is environment-driven:
+删除时，后端先移除 MinIO 对象，再删除数据库记录。如果对象存储删除失败，数据库记录会保留，使失败状态仍然可见并能够重试。
+
+| 方法 | 路径 | 用途 |
+|------|------|------|
+| `POST` | `/api/point-clouds` | 上传并校验 LAS 文件 |
+| `GET` | `/api/point-clouds` | 查询全部点云记录 |
+| `GET` | `/api/point-clouds/{id}` | 查询单个点云及其边界信息 |
+| `GET` | `/api/point-clouds/{id}/download-url` | 获取 MinIO 预签名地址 |
+| `DELETE` | `/api/point-clouds/{id}` | 删除 MinIO 对象和数据库记录 |
+| `GET` | `/api/session` | 获取当前身份和服务端上传限制 |
+| `GET` | `/` | 获取服务信息和常用链接 |
+| `GET` | `/health`、`/health/live` | 检查 API 进程存活状态 |
+| `GET` | `/health/ready` | 检查 PostgreSQL 与 MinIO 就绪状态 |
+
+### 日志与请求追踪
+
+后端默认每行输出一条结构化 JSON 日志。每个 HTTP 请求都会记录：
+
+- `request_id`
+- 请求方法和路径
+- 响应状态码
+- 处理耗时
+- 客户端地址
+
+客户端可以传入 `X-Request-ID`；未提供时由服务端生成。相同编号会写入响应头和安全的 500 错误响应，便于将用户反馈与服务器日志对应。
+
+常用配置如下：
 
 ```dotenv
 APP_NAME=CloudPoint API
 APP_VERSION=0.1.0
 ENVIRONMENT=development
 LOG_LEVEL=INFO
-LOG_FORMAT=json  # use text for human-friendly local output
+LOG_FORMAT=json  # 本地调试可改为 text
 ```
 
-`/health/live` only checks the API process. `/health/ready` returns HTTP 200
-when PostgreSQL, the configured MinIO bucket, and a representative stored
-object referenced by the database are reachable; otherwise it returns HTTP
-503 with a per-dependency status. This catches configuration drift where the
-database points at objects in a different bucket. The split is suitable for
-container liveness and readiness probes.
+`/health/live` 仅检查 API 进程。`/health/ready` 会检查 PostgreSQL、MinIO 存储桶，以及数据库引用的代表性对象是否可访问。任一依赖异常时返回 HTTP 503，并提供分项状态，从而发现数据库对象键和实际存储桶不一致等配置问题。
 
-### Cloudflare Access authentication
+### Cloudflare Access 鉴权
 
-Production uses Cloudflare Access as the identity-aware proxy. The reviewer
-opens the normal application URL, completes the email policy configured in
-Cloudflare Zero Trust, and receives Cloudflare's `HttpOnly`
-`CF_Authorization` application cookie. The frontend does not read this cookie
-and does not contain an invitation token or API secret.
+生产环境使用 Cloudflare Access 作为身份感知代理。访问者通过邮箱策略验证后，Cloudflare 会写入 `HttpOnly` 的 `CF_Authorization` 应用 Cookie。前端不读取该 Cookie，也不保存邀请令牌或 API 密钥。
 
-Cloudflare adds `Cf-Access-Jwt-Assertion` when forwarding authenticated
-requests to the origin. Every `/api/point-clouds` route and `/api/session`
-validates that JWT again at the FastAPI layer:
+Cloudflare 将经过身份验证的请求转发到源站时，会附带 `Cf-Access-Jwt-Assertion`。FastAPI 会对 `/api/point-clouds` 和 `/api/session` 再次执行以下校验：
 
-- RS256 signature against the team's rotating JWKS;
-- exact Cloudflare team issuer;
-- exact Access application Audience (`AUD`);
-- token lifetime and required subject/email claims.
+- 使用团队轮换 JWKS 校验 RS256 签名；
+- 校验 Cloudflare 团队签发者；
+- 校验 Access 应用受众标识 `AUD`；
+- 校验令牌有效期，以及用户编号和邮箱等必要声明。
 
-Production configuration:
+生产环境配置示例：
 
 ```dotenv
 ENVIRONMENT=production
@@ -201,99 +188,103 @@ CF_ACCESS_TEAM_DOMAIN=https://your-team.cloudflareaccess.com
 CF_ACCESS_AUDIENCE=your-application-aud-tag
 ```
 
-Production exposes both the SPA and `/api/*` through one Access-protected
-Worker hostname. `VITE_API_BASE` is empty, so browser requests remain
-same-origin and automatically include the Access cookie. The Worker proxies
-to the generated Zeabur web URL; Caddy serves the SPA and forwards `/api/*`
-plus `/health/*` over Zeabur private networking to FastAPI. The backend has
-no public route of its own and independently validates the Access assertion
-forwarded through the chain. See `docs/zeabur-deployment.md`.
+生产环境通过一个受 Access 保护的 Worker 域名同时暴露 SPA 和 `/api/*`。`VITE_API_BASE` 保持为空，因此浏览器业务请求使用同源地址并自动携带 Access Cookie。
 
-For local development only, set `ENVIRONMENT=development` and
-`AUTH_MODE=development`. This creates a clearly labelled local reviewer
-identity without requiring Cloudflare. The backend refuses this mode when
-`ENVIRONMENT` is not `development`.
+Worker 将请求代理到 Zeabur 生成的前端地址。Caddy 负责提供 SPA，并通过 Zeabur 内网将 `/api/*` 和 `/health/*` 转发到 FastAPI。后端不需要独立公开域名，同时仍会校验转发过来的 Access JWT。详细配置见 [Zeabur 部署文档](docs/zeabur-deployment.md)。
 
-Note that CORS does not authenticate a frontend. A user who has legitimately
-passed the Access email policy can call the API with their own valid session;
-the security guarantee is authenticated reviewer identity and an unreachable
-origin, not that requests were produced by a particular JavaScript bundle.
+本地开发可设置：
 
-## 5. Database & file storage design
-
-`point_clouds` table (metadata only): `id`, `original_filename`, `size_bytes`,
-`raw_object_key`, `las_version`, `point_count`, `point_format`, `has_rgb`,
-`min/max_x/y/z`, `created_at`.
-
-MinIO bucket (configurable, e.g. `cloudpoint`), layout `<id>/raw/<filename>`
-for the original binary. DB ↔ storage linked by `raw_object_key`.
-
-### Migrations (Alembic)
-
-All schema changes are versioned under `backend/migrations/versions/` — one
-file per change, each with `upgrade()` / `downgrade()`. On startup the app
-calls `alembic upgrade head` (`app/db_migrate.py`), so a fresh database is
-provisioned automatically and existing ones are brought up to date; no manual
-step to boot. The applied revision is tracked in the `alembic_version` table.
-
-Common commands (run from `backend/`, venv active):
-```bash
-alembic revision --autogenerate -m "describe change"   # after editing models
-alembic upgrade head        # apply (also runs automatically on app startup)
-alembic downgrade -1        # roll back one revision
-alembic history / current   # inspect
-```
-`alembic.ini` holds no credentials — `migrations/env.py` reads `DATABASE_URL`
-from `backend/.env` and diffs against the ORM models in `app/models.py`.
-
-## 6. Validation & tests
-
-`app/las.py` parses the LAS **public header** per the ASPRS spec and rejects:
-wrong signature (`LASF`), unsupported or compressed formats, invalid point
-record lengths, non-finite/inverted bounds, zero points, invalid point-data
-offsets and files whose declared point records do not fit in the payload.
-This proves a file is structurally consistent rather than trusting its
-extension.
-
-```bash
-cd backend && source .venv/bin/activate && pytest -q   # 29 passing
+```dotenv
+ENVIRONMENT=development
+AUTH_MODE=development
 ```
 
-The upload dialog obtains `max_upload_mb` from `/api/session`, so client-side
-validation and the backend limit cannot silently drift between environments.
-Production currently uses 95 MB to remain below the edge request-body limit.
+该模式会生成带有明确标识的本地测试身份，不需要连接 Cloudflare。后端会拒绝在非开发环境中启用此模式。
 
-The 3D viewer is route-lazy-loaded and Three.js is emitted as a separate
-chunk. The production build's initial JavaScript is about 182 KB instead of
-the previous combined ~678 KB; the ~488 KB Three.js chunk is fetched only
-when a reviewer opens a 3D workspace.
+需要注意，CORS 不是身份验证机制。安全边界由 Cloudflare Access 的邮箱策略、源站不可直接访问，以及 FastAPI 的 JWT 二次校验共同构成。
 
-## 7. Known issues, tradeoffs & next steps
+## 5. 数据库与文件存储
 
-- **Client-side rendering scales to ~a few million points.** The browser
-  downloads and parses the whole `.las`; `lib/lasLoader.js` uniformly
-  subsamples above `maxPoints` (default 2M) to stay responsive, and the viewer
-  labels when a cloud was subsampled. For truly large clouds the right answer
-  is server-side tiling (Potree/3D Tiles) with streaming LOD.
-- **Object-storage egress is the practical bottleneck for viewing.** Since the
-  browser pulls the raw binary from MinIO, viewer latency tracks storage
-  bandwidth. On the Zeabur MinIO instance used in dev, download throughput was
-  ~13 KB/s, so a 2.3 MB cloud took ~3 min while a 166 KB cloud loaded in ~11 s.
-  This is infra-dependent, not a code limit; a colocated/faster bucket removes
-  it. Server-side tiling would also help by shipping only visible tiles.
-- **`.laz` (compressed) not supported** — uncompressed `.las` only. Adding
-  `laz-perf` (WASM) to the loader would cover it.
-- **Auto-migrate on startup** is convenient for this project but means a slow
-  boot if a migration is heavy, and concurrent instances could race; a
-  dedicated migration step in the deploy pipeline is safer at scale.
-- **Whole-file read into memory** on upload — fine for the brief's scale;
-  streaming/multipart-to-MinIO would scale better.
-- **Cloudflare Access owns login and session policy.** The application does
-  not maintain passwords or a persistent session table; authorization beyond
-  the current reviewer role would need application-level roles or groups.
+`point_clouds` 表只保存元数据，主要字段包括：
 
-## Assumptions
-- Reviewer email allow-list and session policy are configured in Cloudflare
-  Access; the API independently validates the resulting application JWT.
-- LAS 1.0–1.4; LAZ (compressed) not handled.
-- Infra credentials supplied via environment; nothing sensitive is committed.
+- `id`
+- `original_filename`
+- `size_bytes`
+- `raw_object_key`
+- `las_version`
+- `point_count`
+- `point_format`
+- `has_rgb`
+- `min/max_x/y/z`
+- `created_at`
+
+MinIO 存储桶名称可配置，默认使用类似 `cloudpoint` 的独立存储桶。原始文件路径为 `<id>/raw/<文件名>`，数据库通过 `raw_object_key` 与对象存储关联。
+
+### Alembic 数据库迁移
+
+所有数据库结构变更都记录在 `backend/migrations/versions/`。每个迁移文件包含 `upgrade()` 和 `downgrade()`。
+
+应用启动时会调用 `alembic upgrade head`，新数据库可以自动初始化，已有数据库也会升级到最新版本。当前迁移版本记录在 `alembic_version` 表中。
+
+常用命令：
+
+```bash
+cd backend
+source .venv/bin/activate
+
+alembic revision --autogenerate -m "描述本次变更"
+alembic upgrade head
+alembic downgrade -1
+alembic history
+alembic current
+```
+
+`alembic.ini` 不保存数据库凭据。`migrations/env.py` 会从 `backend/.env` 读取 `DATABASE_URL`，并根据 `app/models.py` 中的 ORM 模型生成差异。
+
+## 6. 文件校验、测试与性能
+
+`app/las.py` 按照 ASPRS LAS 规范解析公共头部，并拒绝以下文件：
+
+- 缺少 `LASF` 文件签名；
+- 不支持的 LAS 版本或压缩格式；
+- 无效的点记录格式或记录长度；
+- 点数量为零；
+- 非有限值或反向的坐标边界；
+- 无效的点数据偏移；
+- 声明的数据长度超过实际文件大小。
+
+这可以证明文件结构与头部声明一致，而不是只根据扩展名判断文件类型。
+
+运行后端测试：
+
+```bash
+cd backend
+source .venv/bin/activate
+pytest -q
+```
+
+当前共有 **29 项自动化测试**，覆盖 LAS 校验、Cloudflare Access 鉴权、服务健康检查、上传失败回滚、下载和删除流程。
+
+上传弹窗会从 `/api/session` 获取 `max_upload_mb`，因此前端和后端不会使用彼此不一致的文件大小限制。生产环境当前设置为 95 MB，以预留边缘代理请求体限制的安全空间。
+
+三维查看器采用路由级懒加载，Three.js 会构建为独立代码块：
+
+- 优化前首屏 JavaScript：约 678 KB
+- 优化后首屏 JavaScript：约 182 KB
+- Three.js 独立代码块：约 488 KB，仅在打开三维工作区时下载
+
+## 7. 已知限制与后续优化
+
+- **浏览器端渲染适合数百万点以内的场景。** 前端需要下载并解析完整 LAS 文件；超过 `maxPoints`（默认 200 万）后会均匀降采样，并在查看器中显示提示。更大规模场景应使用 Potree 或 3D Tiles，将点云切片后按层级细节流式加载。
+- **对象存储出口带宽会影响首次查看速度。** 浏览器直接从 MinIO 下载原始文件，因此加载时间取决于对象存储带宽。将对象存储与应用部署在更接近的网络区域，或引入点云切片，可以明显改善加载体验。
+- **暂不支持压缩的 `.laz`。** 当前仅支持未压缩的 `.las`。后续可以引入基于 WebAssembly 的 `laz-perf`。
+- **启动时自动迁移适合当前项目规模。** 对于多实例生产系统，更安全的方式是在部署流水线中设置独立迁移步骤，避免实例并发执行大型迁移。
+- **上传过程会在后端内存中读取完整文件。** 当前限制下实现简单可靠；更大规模场景可改为分片上传或流式写入 MinIO。
+- **登录与会话策略由 Cloudflare Access 管理。** 应用本身不维护密码和持久化会话表。如果需要更细粒度的授权，应增加应用级角色或组织分组。
+
+## 8. 项目假设
+
+- 考核者邮箱白名单和会话策略已经在 Cloudflare Access 中配置。
+- API 会独立校验 Cloudflare Access 签发的应用 JWT。
+- 支持 LAS 1.0–1.4，不处理压缩的 LAZ 文件。
+- 基础设施凭据全部通过环境变量提供，仓库中不提交敏感信息。
