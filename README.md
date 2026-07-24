@@ -8,6 +8,28 @@ Full flow: **上传点云 → 校验 → 存文件(MinIO) → 记录元数据(Po
 
 ---
 
+## Live demo
+
+**[Open the protected CloudPoint workspace](https://cloudpoint-access-gateway.linxin5661.workers.dev/)**
+
+The production workspace is protected by Cloudflare Access. Reviewers must use
+an email address included in the Access policy.
+
+![CloudPoint 30-second product walkthrough](docs/assets/cloudpoint-demo.gif)
+
+### Production architecture
+
+```mermaid
+flowchart LR
+    Reviewer["Reviewer browser"] --> Access["Cloudflare Access<br/>email policy"]
+    Access --> Worker["Cloudflare Worker<br/>Access gateway"]
+    Worker --> Web["Zeabur web service<br/>Caddy + React SPA"]
+    Web -->|"same-origin /api + /health"| API["Zeabur API service<br/>FastAPI"]
+    API --> PG[("PostgreSQL<br/>metadata")]
+    API --> MinIO[("MinIO<br/>raw LAS objects")]
+    Reviewer -. "presigned GET" .-> MinIO
+```
+
 ## 1. Tech stack & why
 
 | Layer     | Choice                     | Why |
@@ -41,20 +63,25 @@ CloudPoint/
 │   │   ├── models.py         # PointCloud metadata table
 │   │   ├── schemas.py        # API contract
 │   │   ├── las.py            # ★ LAS validation & metadata (core logic)
-│   │   ├── storage.py        # MinIO wrapper (put / presigned GET)
+│   │   ├── storage.py        # MinIO wrapper (put / delete / presigned GET)
 │   │   ├── security.py       # Cloudflare Access JWT validation
 │   │   ├── db_migrate.py     # runs Alembic upgrade on startup
-│   │   └── routers/point_clouds.py  # upload / list / detail / download-url
+│   │   └── routers/point_clouds.py  # upload / list / detail / download / delete
 │   ├── alembic.ini           # migration config (no secrets — URL from .env)
 │   ├── migrations/           # ★ every schema change recorded here
 │   │   ├── env.py
 │   │   └── versions/         # one file per migration, chronological
-│   └── tests/test_las.py     # ★ automated tests for the core logic
+│   └── tests/                # LAS + auth + health + lifecycle tests
+├── cloudflare/
+│   └── worker.js             # Access-protected reverse proxy to Zeabur
+├── docs/
+│   ├── assets/cloudpoint-demo.gif
+│   └── zeabur-deployment.md
 └── frontend/
     └── src/
         ├── App.jsx, api.js
         ├── lib/lasLoader.js   # ★ browser LAS parser (positions + RGB)
-        └── components/{UploadDialog,UploadForm,PointCloudList,PointCloudViewer}.jsx
+        └── components/        # upload, delete, library and lazy 3D workspace
 ```
 
 ## 3. Install, configure & run
@@ -87,8 +114,9 @@ npm run dev                   # http://localhost:5173
 
 Upload: browser `POST /api/point-clouds` (multipart) → backend reads bytes →
 `parse_las_header` validates → raw LAS stored in MinIO under `<id>/raw/<name>`
-→ metadata row inserted → JSON returned. **The binary is never written to the
-DB** — only object keys.
+→ metadata row inserted → JSON returned. If the database write fails after
+object upload, the just-written object is removed before the error is returned.
+**The binary is never written to the DB** — only object keys.
 
 View: browser `GET /{id}/download-url` → backend returns a short-lived
 presigned MinIO URL → browser fetches the raw `.las`, parses it
@@ -101,13 +129,19 @@ file opens its `3D workspace`. Upload is a contextual library dialog rather
 than a top-level page. Download is a contextual action on the selected file
 and requests an attachment-disposition presigned URL.
 
+Delete is initiated only from the library and requires explicit confirmation.
+The backend removes the MinIO object before deleting its metadata row; if
+storage deletion fails, the database record is preserved so the failure stays
+visible and can be retried.
+
 | Method | Path                              | Purpose |
 |--------|-----------------------------------|---------|
 | POST   | `/api/point-clouds`               | Upload & validate a LAS file |
 | GET    | `/api/point-clouds`               | List all records |
 | GET    | `/api/point-clouds/{id}`          | Single record + bbox |
 | GET    | `/api/point-clouds/{id}/download-url` | Presigned MinIO URL |
-| GET    | `/api/session`                    | Current Cloudflare Access identity |
+| DELETE | `/api/point-clouds/{id}`          | Delete MinIO object + metadata |
+| GET    | `/api/session`                    | Identity + server upload limit |
 | GET    | `/`                               | Service metadata + useful links |
 | GET    | `/health` / `/health/live`        | Process liveness |
 | GET    | `/health/ready`                   | PostgreSQL + MinIO readiness |
@@ -167,15 +201,13 @@ CF_ACCESS_TEAM_DOMAIN=https://your-team.cloudflareaccess.com
 CF_ACCESS_AUDIENCE=your-application-aud-tag
 ```
 
-The recommended deployment exposes both the SPA and `/api/*` on one protected
-hostname. `VITE_API_BASE` is empty in that setup, so browser requests are
-same-origin and automatically include the Access cookie. On Zeabur, the
-project Gateway sends the public hostname to the frontend Caddy service.
-That service serves the SPA and proxies `/api/*` plus `/health/*` over
-Zeabur private networking to FastAPI. The backend therefore needs no public
-domain, and it independently validates the Access assertion forwarded by
-Caddy. See `docs/zeabur-deployment.md` for the complete service topology and
-configuration.
+Production exposes both the SPA and `/api/*` through one Access-protected
+Worker hostname. `VITE_API_BASE` is empty, so browser requests remain
+same-origin and automatically include the Access cookie. The Worker proxies
+to the generated Zeabur web URL; Caddy serves the SPA and forwards `/api/*`
+plus `/health/*` over Zeabur private networking to FastAPI. The backend has
+no public route of its own and independently validates the Access assertion
+forwarded through the chain. See `docs/zeabur-deployment.md`.
 
 For local development only, set `ENVIRONMENT=development` and
 `AUTH_MODE=development`. This creates a clearly labelled local reviewer
@@ -217,13 +249,24 @@ from `backend/.env` and diffs against the ORM models in `app/models.py`.
 ## 6. Validation & tests
 
 `app/las.py` parses the LAS **public header** per the ASPRS spec and rejects:
-wrong signature (`LASF`), unsupported version, zero points, inverted bbox,
-truncated files. This proves a file is genuinely LAS rather than trusting its
+wrong signature (`LASF`), unsupported or compressed formats, invalid point
+record lengths, non-finite/inverted bounds, zero points, invalid point-data
+offsets and files whose declared point records do not fit in the payload.
+This proves a file is structurally consistent rather than trusting its
 extension.
 
 ```bash
-cd backend && source .venv/bin/activate && pytest -q   # 20 passing
+cd backend && source .venv/bin/activate && pytest -q   # 29 passing
 ```
+
+The upload dialog obtains `max_upload_mb` from `/api/session`, so client-side
+validation and the backend limit cannot silently drift between environments.
+Production currently uses 95 MB to remain below the edge request-body limit.
+
+The 3D viewer is route-lazy-loaded and Three.js is emitted as a separate
+chunk. The production build's initial JavaScript is about 182 KB instead of
+the previous combined ~678 KB; the ~488 KB Three.js chunk is fetched only
+when a reviewer opens a 3D workspace.
 
 ## 7. Known issues, tradeoffs & next steps
 

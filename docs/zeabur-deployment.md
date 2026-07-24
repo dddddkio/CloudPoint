@@ -1,20 +1,27 @@
 # Zeabur deployment
 
-CloudPoint uses one public application hostname:
+CloudPoint uses one public, Access-protected application hostname. The current
+production entry point is:
+
+```text
+https://cloudpoint-access-gateway.linxin5661.workers.dev
+```
 
 ```text
 Reviewer
   -> Cloudflare Access
-  -> Zeabur Gateway
+  -> Cloudflare Worker (cloudpoint-access-gateway)
+  -> Zeabur generated web domain
   -> frontend (Caddy :8080)
        /api/*, /health/* -> backend.zeabur.internal:8080
        everything else  -> Vite SPA
   -> PostgreSQL and MinIO over private networking
 ```
 
-The Zeabur Gateway owns the public domain route. The frontend Caddy service
-does the path split because Gateway routes bind a domain to one upstream
-service and port.
+The Worker is the only reviewer-facing entry point and proxies to the generated
+Zeabur web URL. The frontend Caddy service performs the path split. This avoids
+requiring a purchased custom domain while preserving one origin for the SPA
+and API.
 
 ## Services
 
@@ -24,8 +31,6 @@ Create all services in one Zeabur project:
 2. `cloudpoint-api`: Git service, repository root `backend`.
 3. PostgreSQL: database service.
 4. MinIO: template service with persistent storage.
-5. Gateway: enable from **Add-ons > Gateway**.
-
 Both Git services use the Dockerfiles in their root directories.
 
 ## Backend variables
@@ -48,8 +53,8 @@ APP_NAME=CloudPoint API
 APP_VERSION=0.1.0
 LOG_LEVEL=INFO
 LOG_FORMAT=json
-CORS_ORIGINS=https://cloudpoint.example.com
-MAX_UPLOAD_MB=100
+CORS_ORIGINS=https://cloudpoint-access-gateway.linxin5661.workers.dev
+MAX_UPLOAD_MB=95
 ```
 
 Use the PostgreSQL variables and private hostname displayed by Zeabur rather
@@ -74,15 +79,15 @@ Replace the upstream hostname with the backend's fixed private hostname from
 its Zeabur **Networking > Private** section. Keep `VITE_API_BASE` empty so all
 business requests stay on the application origin.
 
-## Gateway and domain
+## Cloudflare Worker and Access
 
-1. Enable **Add-ons > Gateway**.
-2. Add one custom-domain route for `cloudpoint.example.com`.
-3. Set its upstream to `cloudpoint-web`, port `8080`.
-4. Add the CNAME target shown by Zeabur to Cloudflare DNS and enable proxying.
-5. Protect `cloudpoint.example.com` with one Cloudflare Access self-hosted
-   application and an exact reviewer-email Allow policy.
-6. Copy that application's AUD tag into `CF_ACCESS_AUDIENCE`.
+1. Deploy `cloudflare/worker.js` as `cloudpoint-access-gateway`.
+2. Set its `ORIGIN_URL` variable to the generated Zeabur web URL.
+3. Create a Cloudflare Access self-hosted application for the Worker hostname.
+4. Add an exact reviewer-email Allow policy.
+5. Copy the application's AUD tag into the backend
+   `CF_ACCESS_AUDIENCE` variable.
+6. Set `CF_ACCESS_TEAM_DOMAIN` to the account's Access team domain.
 
 No public domain is required for the backend. A request that somehow reaches
 the backend without Cloudflare's signed `Cf-Access-Jwt-Assertion` is rejected
@@ -90,12 +95,13 @@ by FastAPI.
 
 ## Verification
 
-After both Git services are healthy and the Gateway route is active:
+After both Git services are healthy and the Access-protected Worker route is
+active:
 
 ```text
-GET https://cloudpoint.example.com/health/live
-GET https://cloudpoint.example.com/health/ready
-GET https://cloudpoint.example.com/api/session
+GET https://cloudpoint-access-gateway.linxin5661.workers.dev/health/live
+GET https://cloudpoint-access-gateway.linxin5661.workers.dev/health/ready
+GET https://cloudpoint-access-gateway.linxin5661.workers.dev/api/session
 ```
 
 Then verify upload, rendering, and download through the protected application
