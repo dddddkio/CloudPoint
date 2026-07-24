@@ -1,10 +1,11 @@
 """Point cloud upload / list / detail endpoints."""
 from __future__ import annotations
 
+import logging
 import uuid
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -22,6 +23,7 @@ router = APIRouter(
     dependencies=[Depends(require_access_identity)],
 )
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 _HEADER_PROBE_BYTES = 4096  # enough to cover any LAS public header + VLR start
 
@@ -51,19 +53,28 @@ async def upload_point_cloud(
 
     # --- validate it's a real LAS file (not just a .las name) ---
     try:
-        meta = parse_las_header(contents[:_HEADER_PROBE_BYTES])
+        meta = parse_las_header(
+            contents[:_HEADER_PROBE_BYTES],
+            file_size=len(contents),
+        )
     except InvalidLasError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
     cloud_id = str(uuid.uuid4())
-    raw_key = f"{cloud_id}/raw/{file.filename}"
+    original_filename = (
+        (file.filename or "unnamed.las")
+        .replace("\\", "/")
+        .rsplit("/", 1)[-1]
+        .strip()
+    ) or "unnamed.las"
+    raw_key = f"{cloud_id}/raw/{original_filename}"
 
     storage.ensure_bucket()
     storage.put_bytes(raw_key, contents, content_type="application/octet-stream")
 
     pc = PointCloud(
         id=cloud_id,
-        original_filename=file.filename or "unnamed.las",
+        original_filename=original_filename,
         size_bytes=len(contents),
         raw_object_key=raw_key,
         las_version=meta.las_version,
@@ -73,8 +84,19 @@ async def upload_point_cloud(
         min_x=meta.min_x, min_y=meta.min_y, min_z=meta.min_z,
         max_x=meta.max_x, max_y=meta.max_y, max_z=meta.max_z,
     )
-    db.add(pc)
-    db.commit()
+    try:
+        db.add(pc)
+        db.commit()
+    except Exception:
+        db.rollback()
+        try:
+            storage.delete_object(raw_key)
+        except Exception:
+            logger.exception(
+                "Failed to remove an orphaned upload after database failure",
+                extra={"object_key": raw_key},
+            )
+        raise
     db.refresh(pc)
     return _to_out(pc)
 
@@ -117,3 +139,42 @@ def get_download_url(
             response_headers=response_headers,
         )
     }
+
+
+@router.delete(
+    "/{cloud_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def delete_point_cloud(
+    cloud_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Delete the raw object and its metadata record as one user action."""
+    pc = db.get(PointCloud, cloud_id)
+    if pc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Point cloud not found.")
+
+    try:
+        storage.delete_object(pc.raw_object_key)
+    except Exception as exc:
+        logger.exception(
+            "Point-cloud object could not be deleted",
+            extra={"cloud_id": cloud_id},
+        )
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            "Point cloud storage could not complete the deletion.",
+        ) from exc
+
+    try:
+        db.delete(pc)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Metadata deletion failed after object removal",
+            extra={"cloud_id": cloud_id},
+        )
+        raise
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

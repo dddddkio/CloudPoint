@@ -45,6 +45,11 @@ def put_bytes(object_key: str, data: bytes, content_type: str = "application/oct
     )
 
 
+def delete_object(object_key: str) -> None:
+    """Remove one raw point-cloud object from the configured private bucket."""
+    get_client().remove_object(settings.minio_bucket, object_key)
+
+
 def presigned_get(
     object_key: str,
     expires_seconds: int = 3600,

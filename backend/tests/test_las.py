@@ -26,6 +26,8 @@ def build_las_header(
     buf[0:4] = signature
     struct.pack_into("<B", buf, 24, major)
     struct.pack_into("<B", buf, 25, minor)
+    struct.pack_into("<H", buf, 94, 227)
+    struct.pack_into("<I", buf, 96, 227)
     struct.pack_into("<B", buf, 104, point_format)
     struct.pack_into("<H", buf, 105, point_length)
     struct.pack_into("<I", buf, 107, point_count)
@@ -75,3 +77,20 @@ def test_rejects_inverted_bbox():
 def test_rejects_truncated_file():
     with pytest.raises(InvalidLasError, match="too small"):
         parse_las_header(b"LASF" + b"\x00" * 10)
+
+
+def test_rejects_truncated_point_payload():
+    header = build_las_header(point_count=10, point_length=34)
+    with pytest.raises(InvalidLasError, match="truncated"):
+        parse_las_header(header, file_size=300)
+
+
+def test_rejects_point_record_shorter_than_format_requires():
+    with pytest.raises(InvalidLasError, match="too small"):
+        parse_las_header(build_las_header(point_format=3, point_length=20))
+
+
+def test_accepts_complete_point_payload():
+    header = build_las_header(point_count=2, point_length=34)
+    meta = parse_las_header(header, file_size=227 + 2 * 34)
+    assert meta.point_count == 2

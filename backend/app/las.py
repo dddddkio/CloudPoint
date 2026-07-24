@@ -21,6 +21,7 @@ Public header layout (offsets, all little-endian):
 """
 from __future__ import annotations
 
+import math
 import struct
 
 from pydantic import BaseModel
@@ -30,6 +31,19 @@ _MIN_HEADER_BYTES = 227  # smallest legacy public header (LAS 1.0/1.2)
 
 # Point data record formats that carry RGB colour.
 _RGB_FORMATS = {2, 3, 5, 7, 8, 10}
+_MIN_POINT_RECORD_LENGTHS = {
+    0: 20,
+    1: 28,
+    2: 26,
+    3: 34,
+    4: 57,
+    5: 63,
+    6: 30,
+    7: 36,
+    8: 38,
+    9: 59,
+    10: 67,
+}
 
 
 class InvalidLasError(ValueError):
@@ -70,7 +84,11 @@ def _f64(buf: bytes, off: int) -> float:
     return struct.unpack_from("<d", buf, off)[0]
 
 
-def parse_las_header(header: bytes) -> LasMetadata:
+def parse_las_header(
+    header: bytes,
+    *,
+    file_size: int | None = None,
+) -> LasMetadata:
     """Validate and extract metadata from a LAS public header block.
 
     `header` should contain at least the first ~256 bytes of the file.
@@ -89,9 +107,17 @@ def parse_las_header(header: bytes) -> LasMetadata:
 
     point_format_raw = _u8(header, 104)
     point_format = point_format_raw & 0x3F  # high bits are compression flags
+    if point_format_raw != point_format:
+        raise InvalidLasError("Compressed LAZ point data is not supported.")
+    if point_format not in _MIN_POINT_RECORD_LENGTHS:
+        raise InvalidLasError(f"Unsupported LAS point format {point_format}.")
+
     point_length = _u16(header, 105)
-    if point_length == 0:
-        raise InvalidLasError("Invalid point data record length (0).")
+    if point_length < _MIN_POINT_RECORD_LENGTHS[point_format]:
+        raise InvalidLasError(
+            f"Point record length {point_length} is too small for format "
+            f"{point_format}."
+        )
 
     legacy_count = _u32(header, 107)
     point_count = legacy_count
@@ -106,8 +132,24 @@ def parse_las_header(header: bytes) -> LasMetadata:
     max_x, min_x = _f64(header, 179), _f64(header, 187)
     max_y, min_y = _f64(header, 195), _f64(header, 203)
     max_z, min_z = _f64(header, 211), _f64(header, 219)
+    if not all(
+        math.isfinite(value)
+        for value in (min_x, min_y, min_z, max_x, max_y, max_z)
+    ):
+        raise InvalidLasError("LAS bounding box contains a non-finite value.")
     if min_x > max_x or min_y > max_y or min_z > max_z:
         raise InvalidLasError("LAS bounding box is inverted (min > max).")
+
+    if file_size is not None:
+        header_size = _u16(header, 94)
+        point_data_offset = _u32(header, 96)
+        if header_size < _MIN_HEADER_BYTES or point_data_offset < header_size:
+            raise InvalidLasError("LAS point data offset is invalid.")
+        expected_end = point_data_offset + point_count * point_length
+        if expected_end > file_size:
+            raise InvalidLasError(
+                "LAS point data is truncated relative to its header metadata."
+            )
 
     return LasMetadata(
         las_version=f"{major}.{minor}",
