@@ -40,12 +40,19 @@ def liveness() -> dict[str, str]:
 
 @router.get("/health/ready", summary="Dependency readiness check")
 def readiness(response: Response) -> dict[str, object]:
-    """Checks whether PostgreSQL and object storage are available."""
+    """Checks PostgreSQL, the configured bucket, and a representative object."""
     checks: dict[str, str] = {}
+    sample_object_key: str | None = None
 
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
+            sample_object_key = connection.execute(
+                text(
+                    "SELECT raw_object_key FROM point_clouds "
+                    "ORDER BY created_at DESC LIMIT 1"
+                )
+            ).scalar_one_or_none()
         checks["database"] = "ok"
     except Exception:
         checks["database"] = "unavailable"
@@ -53,9 +60,12 @@ def readiness(response: Response) -> dict[str, object]:
 
     try:
         client = storage.get_client()
-        checks["object_storage"] = (
-            "ok" if client.bucket_exists(settings.minio_bucket) else "unavailable"
-        )
+        if not client.bucket_exists(settings.minio_bucket):
+            checks["object_storage"] = "unavailable"
+        else:
+            if sample_object_key:
+                client.stat_object(settings.minio_bucket, sample_object_key)
+            checks["object_storage"] = "ok"
     except Exception:
         checks["object_storage"] = "unavailable"
         logger.exception("Object storage readiness check failed")

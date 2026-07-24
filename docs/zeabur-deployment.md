@@ -42,7 +42,7 @@ MINIO_ENDPOINT=storage.example.com
 MINIO_ACCESS_KEY=replace-me
 MINIO_SECRET_KEY=replace-me
 MINIO_SECURE=true
-MINIO_BUCKET=pointclouds
+MINIO_BUCKET=cloudpoint
 
 APP_NAME=CloudPoint API
 APP_VERSION=0.1.0
@@ -57,8 +57,11 @@ than copying the example credentials above.
 
 The MinIO endpoint used to create presigned URLs must be reachable by the
 reviewer's browser. Bind only the S3 API port to `storage.example.com`, keep
-the bucket private, and do not expose the MinIO console. Configure its API
-CORS allow-origin value to the CloudPoint application hostname.
+the bucket private, and do not expose the MinIO console. `MINIO_BUCKET` must
+match the bucket that already contains the uploaded object keys; changing it
+creates a valid but empty storage namespace and makes existing downloads
+return 404. Configure its API CORS allow-origin value to the CloudPoint
+application hostname.
 
 ## Frontend variables
 

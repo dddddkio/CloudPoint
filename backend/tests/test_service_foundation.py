@@ -75,9 +75,13 @@ def test_service_info_and_liveness():
 
 
 def test_readiness_reports_dependency_status(monkeypatch):
+    class Result:
+        def scalar_one_or_none(self):
+            return "cloud-id/raw/sample.las"
+
     class Connection:
         def execute(self, _statement):
-            return None
+            return Result()
 
     class ConnectionContext:
         def __enter__(self):
@@ -93,6 +97,10 @@ def test_readiness_reports_dependency_status(monkeypatch):
     class StorageClient:
         def bucket_exists(self, _bucket):
             return True
+
+        def stat_object(self, bucket, object_key):
+            assert bucket == system.settings.minio_bucket
+            assert object_key == "cloud-id/raw/sample.las"
 
     monkeypatch.setattr(system, "engine", Engine())
     monkeypatch.setattr(system.storage, "get_client", lambda: StorageClient())
@@ -123,3 +131,40 @@ def test_readiness_returns_503_when_database_is_unavailable(monkeypatch):
     assert response.status_code == 503
     assert result["status"] == "not_ready"
     assert result["checks"]["database"] == "unavailable"
+
+
+def test_readiness_returns_503_when_database_row_has_no_object(monkeypatch):
+    class Result:
+        def scalar_one_or_none(self):
+            return "cloud-id/raw/missing.las"
+
+    class Connection:
+        def execute(self, _statement):
+            return Result()
+
+    class ConnectionContext:
+        def __enter__(self):
+            return Connection()
+
+        def __exit__(self, *_args):
+            return None
+
+    class Engine:
+        def connect(self):
+            return ConnectionContext()
+
+    class StorageClient:
+        def bucket_exists(self, _bucket):
+            return True
+
+        def stat_object(self, _bucket, _object_key):
+            raise RuntimeError("missing object")
+
+    monkeypatch.setattr(system, "engine", Engine())
+    monkeypatch.setattr(system.storage, "get_client", lambda: StorageClient())
+
+    response = Response()
+    result = system.readiness(response)
+    assert response.status_code == 503
+    assert result["status"] == "not_ready"
+    assert result["checks"]["object_storage"] == "unavailable"

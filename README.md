@@ -135,9 +135,11 @@ LOG_FORMAT=json  # use text for human-friendly local output
 ```
 
 `/health/live` only checks the API process. `/health/ready` returns HTTP 200
-when both PostgreSQL and the configured MinIO bucket are reachable, otherwise
-HTTP 503 with a per-dependency status. This split is suitable for container
-liveness and readiness probes.
+when PostgreSQL, the configured MinIO bucket, and a representative stored
+object referenced by the database are reachable; otherwise it returns HTTP
+503 with a per-dependency status. This catches configuration drift where the
+database points at objects in a different bucket. The split is suitable for
+container liveness and readiness probes.
 
 ### Cloudflare Access authentication
 
