@@ -2,8 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { uploadPointCloud } from "../api.js";
 import { CheckIcon, UploadIcon } from "./Icons.jsx";
 
-const MAX_BYTES = 500 * 1024 * 1024;
-
 function formatBytes(bytes) {
   return bytes >= 1024 * 1024
     ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
@@ -15,6 +13,7 @@ export default function UploadForm({
   onCancel,
   onBusyChange,
   onUploaded,
+  maxUploadMb = 95,
 }) {
   const inputRef = useRef(null);
   const [file, setFile] = useState(null);
@@ -40,8 +39,8 @@ export default function UploadForm({
       setPhase("error");
       return;
     }
-    if (!candidate.size || candidate.size > MAX_BYTES) {
-      const message = "The file must be smaller than 500 MB.";
+    if (!candidate.size || candidate.size > maxUploadMb * 1024 * 1024) {
+      const message = `The file must be no larger than ${maxUploadMb} MB.`;
       setError(message);
       setFile(null);
       setPhase("error");
@@ -160,7 +159,7 @@ export default function UploadForm({
         {error && <div className="mt-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</div>}
 
         <div className="mt-5 flex items-center justify-between gap-3">
-          <span className="text-xs text-slate-500">Maximum file size: 500 MB</span>
+          <span className="text-xs text-slate-500">Maximum file size: {maxUploadMb} MB</span>
           <div className="flex items-center gap-2">
             {onCancel && (
               <button

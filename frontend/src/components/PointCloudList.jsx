@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { SearchIcon, UploadIcon, ViewerIcon } from "./Icons.jsx";
+import { SearchIcon, TrashIcon, UploadIcon, ViewerIcon } from "./Icons.jsx";
 
 function fmtSize(bytes) {
   const mb = bytes / (1024 * 1024);
@@ -16,7 +16,7 @@ function fmtDate(iso) {
   });
 }
 
-export default function PointCloudList({ items, onSelect, onUpload }) {
+export default function PointCloudList({ items, onSelect, onUpload, onDelete }) {
   const [query, setQuery] = useState("");
   const filtered = useMemo(
     () => items.filter((item) => item.original_filename.toLowerCase().includes(query.toLowerCase())),
@@ -93,13 +93,24 @@ export default function PointCloudList({ items, onSelect, onUpload }) {
                     <td className="px-3 py-3 tabular-nums text-slate-600">{fmtSize(cloud.size_bytes)}</td>
                     <td className="whitespace-nowrap px-3 py-3 text-slate-600">{fmtDate(cloud.created_at)}</td>
                     <td className="px-5 py-3 text-right">
-                      <button
-                        onClick={() => onSelect(cloud)}
-                        className="inline-flex items-center gap-2 whitespace-nowrap rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:border-blue-300 hover:bg-blue-50 hover:text-blue-800"
-                      >
-                        <ViewerIcon className="h-4 w-4" />
-                        View in 3D
-                      </button>
+                      <div className="inline-flex items-center gap-2">
+                        <button
+                          onClick={() => onSelect(cloud)}
+                          className="inline-flex items-center gap-2 whitespace-nowrap rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:border-blue-300 hover:bg-blue-50 hover:text-blue-800"
+                        >
+                          <ViewerIcon className="h-4 w-4" />
+                          View in 3D
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDelete(cloud)}
+                          className="grid h-8 w-8 place-items-center rounded-md text-slate-400 hover:bg-rose-50 hover:text-rose-700"
+                          aria-label={`Delete ${cloud.original_filename}`}
+                          title="Delete point cloud"
+                        >
+                          <TrashIcon className="h-4 w-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );

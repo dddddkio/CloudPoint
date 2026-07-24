@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import DeleteDialog from "./components/DeleteDialog.jsx";
 import UploadDialog from "./components/UploadDialog.jsx";
 import PointCloudList from "./components/PointCloudList.jsx";
-import PointCloudViewer from "./components/PointCloudViewer.jsx";
 import ToastRegion from "./components/ToastRegion.jsx";
 import {
   ArrowLeftIcon,
@@ -14,7 +14,15 @@ import {
   PointCloudLogo,
   UserIcon,
 } from "./components/Icons.jsx";
-import { getDownloadUrl, getHealth, getSession, listPointClouds } from "./api.js";
+import {
+  deletePointCloud,
+  getDownloadUrl,
+  getHealth,
+  getSession,
+  listPointClouds,
+} from "./api.js";
+
+const PointCloudViewer = lazy(() => import("./components/PointCloudViewer.jsx"));
 
 const pages = {
   overview: { label: "Workspace", description: "Review activity and continue working with recent point clouds" },
@@ -51,12 +59,15 @@ export default function App() {
   const [error, setError] = useState("");
   const [serviceOnline, setServiceOnline] = useState(null);
   const [identity, setIdentity] = useState(null);
+  const [maxUploadMb, setMaxUploadMb] = useState(95);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => window.localStorage.getItem("cloudpoint.sidebar.collapsed") === "true",
   );
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [downloadBusy, setDownloadBusy] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const [messages, setMessages] = useState([]);
   const messageTimers = useRef(new Map());
 
@@ -140,7 +151,12 @@ export default function App() {
   useEffect(() => {
     refresh();
     getSession()
-      .then(setIdentity)
+      .then((session) => {
+        setIdentity(session);
+        if (Number.isFinite(session.max_upload_mb)) {
+          setMaxUploadMb(session.max_upload_mb);
+        }
+      })
       .catch(() => setIdentity(null));
     let active = true;
     async function checkService() {
@@ -192,6 +208,26 @@ export default function App() {
     }
   }
 
+  async function confirmDelete() {
+    if (!deleteTarget || deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      await deletePointCloud(deleteTarget.id);
+      setItems((current) => current.filter((item) => item.id !== deleteTarget.id));
+      if (selected?.id === deleteTarget.id) setSelected(null);
+      notify({
+        type: "success",
+        title: "Point cloud deleted",
+        detail: `${deleteTarget.original_filename} was removed from storage.`,
+      });
+      setDeleteTarget(null);
+    } catch (err) {
+      notify({ type: "error", title: "Point cloud could not be deleted", detail: err.message });
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   const totalPoints = items.reduce((sum, item) => sum + (item.point_count || 0), 0);
   const totalBytes = items.reduce((sum, item) => sum + (item.size_bytes || 0), 0);
   const rgbCount = items.filter((item) => item.has_rgb).length;
@@ -206,6 +242,14 @@ export default function App() {
         open={uploadOpen}
         onClose={closeUpload}
         onUploaded={handleUploaded}
+        maxUploadMb={maxUploadMb}
+      />
+      <DeleteDialog
+        open={Boolean(deleteTarget)}
+        pointCloud={deleteTarget}
+        busy={deleteBusy}
+        onClose={() => !deleteBusy && setDeleteTarget(null)}
+        onConfirm={confirmDelete}
       />
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex h-16 w-full max-w-[1480px] items-center justify-between px-4 sm:px-6 lg:px-8">
@@ -346,23 +390,23 @@ export default function App() {
           )}
 
           {page === "viewer" && (
-            <div>
-              <div className="mb-4 rounded-lg border border-slate-200 bg-white">
-                <div className="flex flex-col justify-between gap-4 px-4 py-4 sm:flex-row sm:items-center">
+            <div className="mx-auto max-w-[1280px] space-y-5 pb-8">
+              <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex flex-col justify-between gap-5 px-5 py-5 sm:flex-row sm:items-center lg:px-6">
                   <div className="flex min-w-0 items-center gap-3">
-                    <button onClick={() => navigate("datasets")} className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50" aria-label="Back to point clouds">
+                    <button onClick={() => navigate("datasets")} className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-slate-300 text-slate-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-800" aria-label="Back to point clouds">
                       <ArrowLeftIcon className="h-4 w-4" />
                     </button>
                     <div className="min-w-0">
-                      <p className="text-xs text-slate-500">Point clouds / 3D workspace</p>
-                      <h1 className="mt-0.5 truncate text-xl font-medium text-slate-900">{selected?.original_filename || "Point cloud not found"}</h1>
+                      <p className="text-sm text-slate-500">Point clouds <span className="mx-1 text-slate-300">/</span> 3D workspace</p>
+                      <h1 className="mt-1 truncate text-2xl font-semibold tracking-tight text-slate-900">{selected?.original_filename || "Point cloud not found"}</h1>
                     </div>
                   </div>
                   <div className="flex items-center">
                     <button
                       onClick={downloadSelected}
                       disabled={!selected || downloadBusy}
-                      className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 shadow-sm hover:border-blue-300 hover:bg-blue-50 hover:text-blue-800 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {downloadBusy ? (
                         <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
@@ -374,20 +418,34 @@ export default function App() {
                   </div>
                 </div>
                 {selected && (
-                  <dl className="grid grid-cols-2 border-t border-slate-200 bg-slate-50/70 text-xs sm:grid-cols-4">
-                    <div className="border-r border-slate-200 px-4 py-3"><dt className="text-slate-500">Points</dt><dd className="mt-1 font-medium text-slate-800">{selected.point_count?.toLocaleString() || "—"}</dd></div>
-                    <div className="sm:border-r border-slate-200 px-4 py-3"><dt className="text-slate-500">LAS version</dt><dd className="mt-1 font-medium text-slate-800">{selected.las_version || "—"}</dd></div>
-                    <div className="border-r border-t border-slate-200 px-4 py-3 sm:border-t-0"><dt className="text-slate-500">Color source</dt><dd className="mt-1 font-medium text-slate-800">{selected.has_rgb ? "RGB available" : "Elevation"}</dd></div>
-                    <div className="border-t border-slate-200 px-4 py-3 sm:border-t-0"><dt className="text-slate-500">Status</dt><dd className="mt-1 inline-flex items-center gap-1.5 font-medium text-slate-800"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Ready</dd></div>
+                  <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-b-xl border-t border-slate-200 bg-slate-200 text-sm sm:grid-cols-4">
+                    <div className="bg-slate-50 px-5 py-4 lg:px-6"><dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Points</dt><dd className="mt-1.5 font-semibold tabular-nums text-slate-800">{selected.point_count?.toLocaleString() || "—"}</dd></div>
+                    <div className="bg-slate-50 px-5 py-4 lg:px-6"><dt className="text-xs font-medium uppercase tracking-wide text-slate-500">LAS version</dt><dd className="mt-1.5 font-semibold text-slate-800">{selected.las_version || "—"}</dd></div>
+                    <div className="bg-slate-50 px-5 py-4 lg:px-6"><dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Color source</dt><dd className="mt-1.5 font-semibold text-slate-800">{selected.has_rgb ? "RGB available" : "Elevation"}</dd></div>
+                    <div className="bg-slate-50 px-5 py-4 lg:px-6"><dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Status</dt><dd className="mt-1.5 inline-flex items-center gap-2 font-semibold text-slate-800"><span className="h-2 w-2 rounded-full bg-emerald-500" />Ready</dd></div>
                   </dl>
                 )}
-              </div>
-              <PointCloudViewer pointCloud={selected} />
+              </section>
+              <Suspense fallback={(
+                <div className="grid min-h-[620px] place-items-center rounded-xl border border-slate-800 bg-[#07121c]">
+                  <div className="text-center">
+                    <span className="mx-auto block h-6 w-6 animate-spin rounded-full border-2 border-slate-700 border-t-blue-400" />
+                    <p className="mt-3 text-sm text-slate-400">Preparing 3D workspace…</p>
+                  </div>
+                </div>
+              )}>
+                <PointCloudViewer pointCloud={selected} />
+              </Suspense>
             </div>
           )}
 
           {page === "datasets" && (
-            <PointCloudList items={items} onSelect={openDataset} onUpload={openUpload} />
+            <PointCloudList
+              items={items}
+              onSelect={openDataset}
+              onUpload={openUpload}
+              onDelete={setDeleteTarget}
+            />
           )}
         </main>
       </div>

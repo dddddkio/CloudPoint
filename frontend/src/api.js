@@ -53,3 +53,19 @@ export async function getDownloadUrl(id, { download = false } = {}) {
   if (!res.ok) throw new Error(`Download URL failed: ${res.status}`);
   return (await res.json()).url;
 }
+
+export async function deletePointCloud(id) {
+  const res = await fetch(`${API_BASE}/api/point-clouds/${id}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (res.ok) return;
+
+  let detail = "";
+  try {
+    detail = (await res.json()).detail;
+  } catch {
+    // Preserve the status fallback when an upstream returns a non-JSON error.
+  }
+  throw new Error(detail || `Delete failed: ${res.status}`);
+}

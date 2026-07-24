@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import UploadForm from "./UploadForm.jsx";
 import { CloseIcon } from "./Icons.jsx";
 
-export default function UploadDialog({ open, onClose, onUploaded }) {
+export default function UploadDialog({ open, onClose, onUploaded, maxUploadMb = 95 }) {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -56,10 +56,11 @@ export default function UploadDialog({ open, onClose, onUploaded }) {
           onCancel={onClose}
           onBusyChange={setBusy}
           onUploaded={onUploaded}
+          maxUploadMb={maxUploadMb}
         />
 
         <footer className="border-t border-slate-200 bg-slate-50 px-5 py-3 text-xs text-slate-500">
-          Accepted: LAS 1.0–1.4 · Maximum 500 MB · File signature and metadata are validated before storage
+          Accepted: LAS 1.0–1.4 · Maximum {maxUploadMb} MB · File structure and metadata are validated before storage
         </footer>
       </section>
     </div>

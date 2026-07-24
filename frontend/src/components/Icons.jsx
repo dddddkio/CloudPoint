@@ -100,3 +100,7 @@ export function ArrowLeftIcon(props) {
 export function DownloadIcon(props) {
   return <IconBase {...props}><path d="M12 4v11m0 0 4-4m-4 4-4-4" /><path d="M5 19h14" /></IconBase>;
 }
+
+export function TrashIcon(props) {
+  return <IconBase {...props}><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" /></IconBase>;
+}

@@ -261,11 +261,11 @@ export default function PointCloudViewer({ pointCloud }) {
   }, [pointSize]);
 
   return (
-    <section ref={panelRef} className="overflow-hidden rounded-lg border border-slate-800 bg-[#07121c]">
-      <header className="flex min-h-14 items-center justify-between gap-3 border-b border-white/10 bg-[#0b1822] px-4 py-2">
+    <section ref={panelRef} className="overflow-hidden rounded-xl border border-slate-800 bg-[#07121c] shadow-[0_12px_32px_rgba(15,23,42,0.12)]">
+      <header className="flex min-h-16 items-center justify-between gap-3 border-b border-white/10 bg-[#0b1822] px-5 py-3">
         <div className="min-w-0">
-          <h2 className="text-sm font-medium text-white">3D viewer</h2>
-          <p className="max-w-[360px] truncate text-xs text-slate-400" title={pointCloud?.original_filename}>
+          <h2 className="text-base font-medium text-white">3D viewer</h2>
+          <p className="mt-0.5 max-w-[420px] truncate text-xs text-slate-400" title={pointCloud?.original_filename}>
             {pointCloud?.original_filename || "Select a dataset to begin"}
           </p>
         </div>
@@ -282,11 +282,11 @@ export default function PointCloudViewer({ pointCloud }) {
         </div>
       </header>
 
-      <div className="grid md:grid-cols-[minmax(0,1fr)_240px]">
-        <div className="relative h-[560px] min-w-0 overflow-hidden viewer-shell">
+      <div className="grid lg:grid-cols-[minmax(0,1fr)_280px]">
+        <div className="relative h-[clamp(500px,62vh,680px)] min-w-0 overflow-hidden viewer-shell">
           <div ref={mountRef} className="h-full w-full" />
 
-          <div className="pointer-events-none absolute left-4 top-4 flex items-center gap-2 rounded-md border border-white/10 bg-[#06111a]/85 px-2.5 py-1.5">
+          <div className="pointer-events-none absolute left-5 top-5 flex items-center gap-2 rounded-md border border-white/10 bg-[#06111a]/85 px-2.5 py-1.5 shadow-sm backdrop-blur">
             <span className={`h-1.5 w-1.5 rounded-full ${status === "ready" ? "bg-emerald-400" : "bg-slate-500"}`} />
             <span className="text-xs capitalize text-slate-300">{status === "ready" ? "Ready" : status}</span>
           </div>
@@ -319,7 +319,7 @@ export default function PointCloudViewer({ pointCloud }) {
           )}
 
           {status === "ready" && stats && (
-            <div className="pointer-events-none absolute bottom-4 left-4 flex flex-wrap gap-2 text-xs text-slate-400">
+            <div className="pointer-events-none absolute bottom-5 left-5 flex flex-wrap gap-2 text-xs text-slate-400">
               <span className="rounded bg-black/45 px-2 py-1.5">Drag to rotate</span>
               <span className="rounded bg-black/45 px-2 py-1.5">Scroll to zoom</span>
               <span className="rounded bg-black/45 px-2 py-1.5">Right drag to pan</span>
@@ -327,8 +327,8 @@ export default function PointCloudViewer({ pointCloud }) {
           )}
         </div>
 
-        <aside className="border-t border-white/10 bg-[#0b1822] p-4 text-slate-300 md:border-l md:border-t-0">
-          <h3 className="text-sm font-medium text-white">Display settings</h3>
+        <aside className="border-t border-white/10 bg-[#0b1822] p-5 text-slate-300 lg:border-l lg:border-t-0">
+          <h3 className="text-base font-medium text-white">Display settings</h3>
           {status === "ready" && stats ? (
             <div className="mt-5 space-y-6">
               <div>
