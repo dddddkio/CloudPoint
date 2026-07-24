@@ -207,20 +207,20 @@ export default function App() {
         onClose={closeUpload}
         onUploaded={handleUploaded}
       />
-      <header className="sticky top-0 z-40 border-b border-slate-200 bg-white">
-        <div className="flex h-14 items-center justify-between px-4 lg:px-6">
-          <div className="flex items-center gap-3">
+      <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex h-16 w-full max-w-[1480px] items-center justify-between px-4 sm:px-6 lg:px-8">
+          <div className="flex min-w-0 items-center gap-3">
             <button onClick={() => setMobileSidebarOpen(true)} className="grid h-9 w-9 place-items-center rounded-md text-slate-600 hover:bg-slate-100 md:hidden" aria-label="Open navigation">
               <MenuIcon className="h-5 w-5" />
             </button>
-            <PointCloudLogo className="h-9 w-9" />
-            <span className="text-base font-medium text-slate-900">CloudPoint</span>
-            <span className="hidden h-5 w-px bg-slate-200 sm:block" />
-            <span className="hidden text-sm text-slate-500 sm:block">{page === "viewer" ? "Point clouds" : pages[page].label}</span>
+            <PointCloudLogo className="h-10 w-10 shrink-0" />
+            <span className="truncate text-lg font-semibold tracking-tight text-slate-900">CloudPoint</span>
+            <span className="hidden h-6 w-px bg-slate-200 sm:block" />
+            <span className="hidden truncate text-sm text-slate-500 sm:block">{page === "viewer" ? "Point clouds" : pages[page].label}</span>
           </div>
-          <div className="flex items-center gap-2 text-sm">
+          <div className="ml-4 flex shrink-0 items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm">
             <span className={`h-2 w-2 rounded-full ${serviceOnline === true ? "bg-emerald-500" : serviceOnline === false ? "bg-rose-500" : "bg-slate-300"}`} />
-            <span className="text-slate-600">
+            <span className="hidden text-slate-600 sm:inline">
               {serviceOnline === true ? "Service available" : serviceOnline === false ? "Service unavailable" : "Checking service"}
             </span>
           </div>
@@ -228,8 +228,8 @@ export default function App() {
       </header>
 
       <div className="mx-auto flex max-w-[1480px]">
-        {mobileSidebarOpen && <button className="fixed inset-0 top-14 z-40 bg-slate-900/30 md:hidden" onClick={() => setMobileSidebarOpen(false)} aria-label="Close navigation overlay" />}
-        <aside className={`${mobileSidebarOpen ? "fixed bottom-0 left-0 top-14 z-50 flex w-64" : "hidden"} overflow-hidden flex-col shrink-0 border-r border-slate-200 bg-white px-3 py-4 transition-[width] duration-200 md:sticky md:top-14 md:z-auto md:flex md:h-[calc(100vh-3.5rem)] ${sidebarCollapsed ? "md:w-[68px]" : "md:w-56"}`}>
+        {mobileSidebarOpen && <button className="fixed inset-0 top-16 z-40 bg-slate-900/30 md:hidden" onClick={() => setMobileSidebarOpen(false)} aria-label="Close navigation overlay" />}
+        <aside className={`${mobileSidebarOpen ? "fixed bottom-0 left-0 top-16 z-50 flex w-64" : "hidden"} overflow-hidden flex-col shrink-0 border-r border-slate-200 bg-white px-3 py-4 transition-[width] duration-200 md:sticky md:top-16 md:z-auto md:flex md:h-[calc(100vh-4rem)] ${sidebarCollapsed ? "md:w-[68px]" : "md:w-56"}`}>
           <div className={`relative mb-3 flex h-12 items-center border-b border-slate-200 pb-3 ${sidebarCollapsed ? "md:justify-center" : "justify-between px-2"}`}>
             <p className={`whitespace-nowrap text-xs font-medium text-slate-500 transition-opacity duration-100 ${sidebarCollapsed ? "md:pointer-events-none md:absolute md:w-0 md:overflow-hidden md:opacity-0 md:invisible" : "delay-150 opacity-100"}`}>Cloud workspace</p>
             <button
