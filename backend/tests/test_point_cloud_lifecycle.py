@@ -126,7 +126,7 @@ def test_delete_missing_record_returns_404():
 def test_render_sample_windows_are_spread_and_bounded():
     windows = point_clouds._sample_windows(100_000_000, 2_000_000)
 
-    assert len(windows) == 64
+    assert len(windows) == 32
     assert sum(length for _, length in windows) == 2_000_000
     assert windows[0][0] == 0
     assert windows[-1][0] + windows[-1][1] <= 100_000_000

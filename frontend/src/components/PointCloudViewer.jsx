@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { getDownloadUrl, getRenderSampleUrl } from "../api.js";
 import { loadLasInWorker } from "../lib/loadLasInWorker.js";
+import { renderPointBudget } from "../lib/renderBudget.js";
 import { FullscreenIcon, ResetIcon, TopViewIcon, ViewerIcon } from "./Icons.jsx";
 
 function elevationColors(positions) {
@@ -160,12 +161,9 @@ export default function PointCloudViewer({ pointCloud }) {
 
     (async () => {
       try {
-        const shouldUseRenderSample = (
-          pointCloud.point_count > 2_000_000
-          || pointCloud.size_bytes > 128 * 1024 * 1024
-        );
-        const url = shouldUseRenderSample
-          ? getRenderSampleUrl(pointCloud.id)
+        const pointBudget = renderPointBudget(pointCloud);
+        const url = pointBudget
+          ? getRenderSampleUrl(pointCloud.id, pointBudget)
           : await getDownloadUrl(pointCloud.id);
         if (disposed) return;
         loadTask = loadLasInWorker(url, {
@@ -224,9 +222,12 @@ export default function PointCloudViewer({ pointCloud }) {
         setColorMode(cloud.colors ? "rgb" : "elevation");
         setStats({
           loaded: cloud.loadedPoints,
-          total: cloud.totalPoints,
-          available: cloud.availablePoints,
-          subsampled: cloud.subsampled,
+          total: cloud.sourceTotalPoints || cloud.totalPoints,
+          available: cloud.serverSampled
+            ? (cloud.sourceTotalPoints || cloud.totalPoints)
+            : cloud.availablePoints,
+          subsampled: cloud.subsampled || cloud.serverSampled,
+          serverSampled: cloud.serverSampled,
           truncated: cloud.truncated,
           rgb: Boolean(cloud.colors),
           size: [actualSize.x, actualSize.y, actualSize.z],
@@ -330,6 +331,8 @@ export default function PointCloudViewer({ pointCloud }) {
                 <p className="mt-3 text-sm text-slate-300">
                   {loadProgress.phase === "downloading"
                     ? "Downloading point cloud…"
+                    : loadProgress.phase === "retrying"
+                      ? "Reconnecting to storage…"
                     : loadProgress.phase === "processing"
                       ? "Sampling point records…"
                       : loadProgress.phase === "preparing"
@@ -404,7 +407,8 @@ export default function PointCloudViewer({ pointCloud }) {
 
               {stats.subsampled && (
                 <p className="rounded-md bg-amber-400/10 p-3 text-xs leading-5 text-amber-200">
-                  Showing {stats.loaded.toLocaleString()} of {stats.available.toLocaleString()} readable points for browser performance.
+                  Showing {stats.loaded.toLocaleString()} of {stats.available.toLocaleString()} points
+                  {stats.serverSampled ? " using a distributed server-side sample." : " for browser performance."}
                 </p>
               )}
             </div>

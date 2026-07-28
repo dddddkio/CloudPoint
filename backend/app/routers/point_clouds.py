@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 _HEADER_PROBE_BYTES = 4096  # enough to cover any LAS public header + VLR start
 _MAX_RENDER_POINTS = 2_000_000
-_SAMPLE_WINDOW_COUNT = 64
+_SAMPLE_WINDOW_COUNT = 32
 
 
 def _to_out(pc: PointCloud) -> PointCloudOut:
@@ -261,6 +261,16 @@ def stream_render_sample(
             yield chunk
 
     content_length = len(compact_header) + sample_count * meta.point_record_length
+    logger.info(
+        "Point-cloud render sample prepared",
+        extra={
+            "cloud_id": cloud_id,
+            "source_bytes": object_size,
+            "source_points": readable_points,
+            "sample_points": sample_count,
+            "sample_windows": len(windows),
+        },
+    )
     return StreamingResponse(
         generate(),
         media_type="application/vnd.las",

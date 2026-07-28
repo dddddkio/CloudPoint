@@ -6,6 +6,7 @@ come from the environment (never hard-coded).
 from __future__ import annotations
 
 import io
+import time
 
 from minio import Minio
 
@@ -54,19 +55,41 @@ def stat_object(object_key: str):
     return get_client().stat_object(settings.minio_bucket, object_key)
 
 
-def read_range(object_key: str, offset: int, length: int) -> bytes:
-    """Read one bounded object range and always release the HTTP connection."""
-    response = get_client().get_object(
-        settings.minio_bucket,
-        object_key,
-        offset=offset,
-        length=length,
-    )
-    try:
-        return response.read()
-    finally:
-        response.close()
-        response.release_conn()
+def read_range(
+    object_key: str,
+    offset: int,
+    length: int,
+    max_attempts: int = 3,
+) -> bytes:
+    """Read a complete object range, retrying interrupted internal transfers."""
+    last_error: Exception | None = None
+
+    for attempt in range(max_attempts):
+        response = None
+        try:
+            response = get_client().get_object(
+                settings.minio_bucket,
+                object_key,
+                offset=offset,
+                length=length,
+            )
+            data = response.read()
+            if len(data) != length:
+                raise IOError(
+                    f"Object range was truncated: expected {length}, got {len(data)}"
+                )
+            return data
+        except Exception as exc:
+            last_error = exc
+            if attempt + 1 < max_attempts:
+                time.sleep(0.15 * (attempt + 1))
+        finally:
+            if response is not None:
+                response.close()
+                response.release_conn()
+
+    assert last_error is not None
+    raise last_error
 
 
 def presigned_get(

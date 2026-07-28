@@ -30,6 +30,11 @@ class JsonFormatter(logging.Formatter):
         "duration_ms",
         "client_ip",
         "environment",
+        "cloud_id",
+        "source_bytes",
+        "source_points",
+        "sample_points",
+        "sample_windows",
     )
 
     def format(self, record: logging.LogRecord) -> str:

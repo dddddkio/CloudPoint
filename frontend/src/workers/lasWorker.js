@@ -7,6 +7,10 @@ function report(phase, percent = null, receivedBytes = 0, totalBytes = 0) {
   });
 }
 
+function wait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 async function readResponse(response) {
   const declaredLength = Number(response.headers.get("content-length"));
   const totalBytes = Number.isSafeInteger(declaredLength) && declaredLength > 0
@@ -97,17 +101,51 @@ async function readResponse(response) {
   return target.buffer;
 }
 
+async function downloadWithRetry(url, maxAttempts = 3) {
+  let lastError;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error(`Download failed: ${response.status}`);
+      }
+      return {
+        buffer: await readResponse(response),
+        response,
+      };
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxAttempts) break;
+      report("retrying", null);
+      await wait(300 * attempt);
+    }
+  }
+
+  throw new Error(
+    `${lastError instanceof Error ? lastError.message : "Download failed."} `
+    + `The viewer retried ${maxAttempts} times.`,
+  );
+}
+
 self.onmessage = async ({ data }) => {
   try {
     report("connecting");
-    const response = await fetch(data.url, { credentials: "include" });
-    if (!response.ok) {
-      throw new Error(`Download failed: ${response.status}`);
-    }
-
-    const buffer = await readResponse(response);
+    const { buffer, response } = await downloadWithRetry(data.url);
     report("processing", null, buffer.byteLength, buffer.byteLength);
     const cloud = parseLas(buffer, { maxPoints: data.maxPoints });
+    const originalPointCount = Number(
+      response.headers.get("x-original-point-count"),
+    );
+    cloud.serverSampled = response.headers.get("x-cloudpoint-sampled") === "true";
+    cloud.sourceTotalPoints = (
+      Number.isSafeInteger(originalPointCount) && originalPointCount > 0
+    )
+      ? originalPointCount
+      : cloud.totalPoints;
     report("preparing", 100, buffer.byteLength, buffer.byteLength);
 
     const transfer = [cloud.positions.buffer];
