@@ -50,6 +50,25 @@ def delete_object(object_key: str) -> None:
     get_client().remove_object(settings.minio_bucket, object_key)
 
 
+def stat_object(object_key: str):
+    return get_client().stat_object(settings.minio_bucket, object_key)
+
+
+def read_range(object_key: str, offset: int, length: int) -> bytes:
+    """Read one bounded object range and always release the HTTP connection."""
+    response = get_client().get_object(
+        settings.minio_bucket,
+        object_key,
+        offset=offset,
+        length=length,
+    )
+    try:
+        return response.read()
+    finally:
+        response.close()
+        response.release_conn()
+
+
 def presigned_get(
     object_key: str,
     expires_seconds: int = 3600,

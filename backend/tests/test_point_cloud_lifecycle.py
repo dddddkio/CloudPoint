@@ -121,3 +121,23 @@ def test_delete_missing_record_returns_404():
     with pytest.raises(HTTPException) as exc:
         point_clouds.delete_point_cloud("missing", db=db)
     assert exc.value.status_code == 404
+
+
+def test_render_sample_windows_are_spread_and_bounded():
+    windows = point_clouds._sample_windows(100_000_000, 2_000_000)
+
+    assert len(windows) == 64
+    assert sum(length for _, length in windows) == 2_000_000
+    assert windows[0][0] == 0
+    assert windows[-1][0] + windows[-1][1] <= 100_000_000
+    assert all(start >= 0 and length > 0 for start, length in windows)
+
+
+def test_render_sample_header_rewrites_point_count_and_data_offset():
+    original = build_las_file()
+    compact = point_clouds._sample_header(original, 1_250_000)
+    view = memoryview(compact)
+
+    assert int.from_bytes(view[96:100], "little") == 227
+    assert int.from_bytes(view[100:104], "little") == 0
+    assert int.from_bytes(view[107:111], "little") == 1_250_000

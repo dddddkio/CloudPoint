@@ -18,22 +18,79 @@ const RGB_OFFSET = {
   6: null, 7: 30, 8: 30, 10: 30,
 };
 
+const MIN_HEADER_BYTES = 227;
+const LAS_14_HEADER_BYTES = 255;
+const MIN_POINT_LENGTH = {
+  0: 20, 1: 28, 2: 26, 3: 34, 4: 57, 5: 63,
+  6: 30, 7: 36, 8: 38, 9: 59, 10: 67,
+};
+
+function invalidLas(message) {
+  return new Error(`Invalid or incomplete LAS file: ${message}`);
+}
+
 export function parseLas(arrayBuffer, { maxPoints = 2_000_000 } = {}) {
+  if (!(arrayBuffer instanceof ArrayBuffer) || arrayBuffer.byteLength < MIN_HEADER_BYTES) {
+    throw invalidLas(
+      `only ${arrayBuffer?.byteLength ?? 0} bytes were downloaded; `
+      + `at least ${MIN_HEADER_BYTES} bytes are required for the header.`,
+    );
+  }
+  if (!Number.isSafeInteger(maxPoints) || maxPoints <= 0) {
+    throw new Error("maxPoints must be a positive safe integer.");
+  }
+
   const dv = new DataView(arrayBuffer);
 
   if (dv.getUint32(0, false) !== 0x4c415346 /* "LASF" */) {
-    throw new Error("Not a LAS file (missing LASF signature).");
+    throw invalidLas('missing the "LASF" signature.');
   }
 
+  const versionMajor = dv.getUint8(24);
   const versionMinor = dv.getUint8(25);
+  if (versionMajor !== 1 || versionMinor > 4) {
+    throw invalidLas(`unsupported LAS version ${versionMajor}.${versionMinor}.`);
+  }
+  if (versionMinor >= 4 && arrayBuffer.byteLength < LAS_14_HEADER_BYTES) {
+    throw invalidLas("the LAS 1.4 header is truncated.");
+  }
+
+  const headerSize = dv.getUint16(94, true);
   const pointDataOffset = dv.getUint32(96, true);
-  const pointFormat = dv.getUint8(104) & 0x3f;
+  const pointFormatRaw = dv.getUint8(104);
+  const pointFormat = pointFormatRaw & 0x3f;
   const pointLength = dv.getUint16(105, true);
+  const minimumPointLength = MIN_POINT_LENGTH[pointFormat];
+
+  if (pointFormatRaw !== pointFormat) {
+    throw invalidLas("compressed LAZ point data is not supported.");
+  }
+  if (minimumPointLength === undefined) {
+    throw invalidLas(`point format ${pointFormat} is not supported.`);
+  }
+  if (pointLength < minimumPointLength) {
+    throw invalidLas(
+      `point record length ${pointLength} is too small for format ${pointFormat}.`,
+    );
+  }
+  if (
+    headerSize < MIN_HEADER_BYTES
+    || pointDataOffset < headerSize
+    || pointDataOffset > arrayBuffer.byteLength
+  ) {
+    throw invalidLas("the point data offset is outside the downloaded file.");
+  }
 
   let pointCount = dv.getUint32(107, true); // legacy count
   if (versionMinor >= 4) {
-    const count14 = Number(dv.getBigUint64(247, true));
-    if (count14 > 0) pointCount = count14;
+    const count14 = dv.getBigUint64(247, true);
+    if (count14 > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw invalidLas("the declared point count is too large for this browser.");
+    }
+    if (count14 > 0n) pointCount = Number(count14);
+  }
+  if (!Number.isSafeInteger(pointCount) || pointCount <= 0) {
+    throw invalidLas("the file reports no readable points.");
   }
 
   const scaleX = dv.getFloat64(131, true);
@@ -49,6 +106,29 @@ export function parseLas(arrayBuffer, { maxPoints = 2_000_000 } = {}) {
   const maxX = dv.getFloat64(179, true);
   const maxY = dv.getFloat64(195, true);
   const maxZ = dv.getFloat64(211, true);
+  const numericHeaderValues = [
+    scaleX, scaleY, scaleZ, offX, offY, offZ,
+    minX, minY, minZ, maxX, maxY, maxZ,
+  ];
+  if (!numericHeaderValues.every(Number.isFinite)) {
+    throw invalidLas("the coordinate metadata contains a non-finite value.");
+  }
+  if (minX > maxX || minY > maxY || minZ > maxZ) {
+    throw invalidLas("the coordinate bounds are inverted.");
+  }
+
+  // A few real-world files (and interrupted object downloads) report more
+  // points than the downloaded bytes actually contain. Never let the raw
+  // DataView exception escape: render the complete records that are present
+  // and surface the discrepancy to the viewer.
+  const availablePointCount = Math.floor(
+    (arrayBuffer.byteLength - pointDataOffset) / pointLength,
+  );
+  const readablePointCount = Math.min(pointCount, availablePointCount);
+  if (readablePointCount <= 0) {
+    throw invalidLas("no complete point records were downloaded.");
+  }
+  const truncated = availablePointCount < pointCount;
 
   // Recentre on the bbox midpoint so coordinates near a large CRS origin
   // don't blow out float32 precision in the GPU.
@@ -57,15 +137,15 @@ export function parseLas(arrayBuffer, { maxPoints = 2_000_000 } = {}) {
   const cz = (minZ + maxZ) / 2;
 
   const rgbOffset = RGB_OFFSET[pointFormat] ?? null;
-  const stride = Math.max(1, Math.ceil(pointCount / maxPoints));
-  const loaded = Math.ceil(pointCount / stride);
+  const stride = Math.max(1, Math.ceil(readablePointCount / maxPoints));
+  const loaded = Math.ceil(readablePointCount / stride);
 
   const positions = new Float32Array(loaded * 3);
   const colors = rgbOffset !== null ? new Float32Array(loaded * 3) : null;
 
   // Detect 8- vs 16-bit colour by peeking at the first coloured point.
   let colorDivisor = 65535;
-  if (rgbOffset !== null && pointCount > 0) {
+  if (rgbOffset !== null) {
     const r = dv.getUint16(pointDataOffset + rgbOffset, true);
     const g = dv.getUint16(pointDataOffset + rgbOffset + 2, true);
     const b = dv.getUint16(pointDataOffset + rgbOffset + 4, true);
@@ -73,7 +153,7 @@ export function parseLas(arrayBuffer, { maxPoints = 2_000_000 } = {}) {
   }
 
   let w = 0;
-  for (let i = 0; i < pointCount; i += stride) {
+  for (let i = 0; i < readablePointCount; i += stride) {
     const base = pointDataOffset + i * pointLength;
     const px = dv.getInt32(base, true) * scaleX + offX;
     const py = dv.getInt32(base + 4, true) * scaleY + offY;
@@ -96,8 +176,10 @@ export function parseLas(arrayBuffer, { maxPoints = 2_000_000 } = {}) {
     colors: colors ? (w === loaded ? colors : colors.subarray(0, w * 3)) : null,
     pointFormat,
     totalPoints: pointCount,
+    availablePoints: readablePointCount,
     loadedPoints: w,
     subsampled: stride > 1,
+    truncated,
     bbox: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
     size: [maxX - minX, maxY - minY, maxZ - minZ],
   };

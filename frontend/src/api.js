@@ -54,6 +54,11 @@ export async function getDownloadUrl(id, { download = false } = {}) {
   return (await res.json()).url;
 }
 
+export function getRenderSampleUrl(id, maxPoints = 2_000_000) {
+  return `${API_BASE}/api/point-clouds/${encodeURIComponent(id)}/render-sample`
+    + `?max_points=${encodeURIComponent(maxPoints)}`;
+}
+
 export async function deletePointCloud(id) {
   const res = await fetch(`${API_BASE}/api/point-clouds/${id}`, {
     method: "DELETE",

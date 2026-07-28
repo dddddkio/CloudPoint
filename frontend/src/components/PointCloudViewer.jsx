@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { getDownloadUrl } from "../api.js";
-import { parseLas } from "../lib/lasLoader.js";
+import { getDownloadUrl, getRenderSampleUrl } from "../api.js";
+import { loadLasInWorker } from "../lib/loadLasInWorker.js";
 import { FullscreenIcon, ResetIcon, TopViewIcon, ViewerIcon } from "./Icons.jsx";
 
 function elevationColors(positions) {
@@ -55,6 +55,10 @@ export default function PointCloudViewer({ pointCloud }) {
   const [stats, setStats] = useState(null);
   const [colorMode, setColorMode] = useState("rgb");
   const [pointSize, setPointSize] = useState(100);
+  const [loadProgress, setLoadProgress] = useState({
+    phase: "connecting",
+    percent: null,
+  });
 
   const setCameraView = useCallback((mode = "perspective") => {
     const camera = cameraRef.current;
@@ -87,6 +91,7 @@ export default function PointCloudViewer({ pointCloud }) {
     setStatus("loading");
     setError("");
     setStats(null);
+    setLoadProgress({ phase: "connecting", percent: null });
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x07111a);
@@ -113,6 +118,7 @@ export default function PointCloudViewer({ pointCloud }) {
     let points = null;
     let grid = null;
     let animationFrame = 0;
+    let loadTask = null;
 
     function resize() {
       const width = Math.max(mount.clientWidth, 1);
@@ -154,10 +160,21 @@ export default function PointCloudViewer({ pointCloud }) {
 
     (async () => {
       try {
-        const url = await getDownloadUrl(pointCloud.id);
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`Download failed: ${response.status}`);
-        const cloud = parseLas(await response.arrayBuffer());
+        const shouldUseRenderSample = (
+          pointCloud.point_count > 2_000_000
+          || pointCloud.size_bytes > 128 * 1024 * 1024
+        );
+        const url = shouldUseRenderSample
+          ? getRenderSampleUrl(pointCloud.id)
+          : await getDownloadUrl(pointCloud.id);
+        if (disposed) return;
+        loadTask = loadLasInWorker(url, {
+          maxPoints: 2_000_000,
+          onProgress: (progress) => {
+            if (!disposed) setLoadProgress(progress);
+          },
+        });
+        const cloud = await loadTask.promise;
         if (disposed) return;
 
         const geometry = new THREE.BufferGeometry();
@@ -208,13 +225,15 @@ export default function PointCloudViewer({ pointCloud }) {
         setStats({
           loaded: cloud.loadedPoints,
           total: cloud.totalPoints,
+          available: cloud.availablePoints,
           subsampled: cloud.subsampled,
+          truncated: cloud.truncated,
           rgb: Boolean(cloud.colors),
           size: [actualSize.x, actualSize.y, actualSize.z],
         });
         setStatus("ready");
       } catch (err) {
-        if (!disposed) {
+        if (!disposed && err.name !== "AbortError") {
           setError(err.message);
           setStatus("error");
         }
@@ -223,6 +242,7 @@ export default function PointCloudViewer({ pointCloud }) {
 
     return () => {
       disposed = true;
+      loadTask?.cancel();
       cancelAnimationFrame(animationFrame);
       observer.disconnect();
       controls.dispose();
@@ -305,9 +325,30 @@ export default function PointCloudViewer({ pointCloud }) {
 
           {status === "loading" && (
             <div className="absolute inset-0 grid place-items-center bg-[#061019]/80">
-              <div className="text-center">
+              <div className="w-64 text-center">
                 <span className="mx-auto block h-6 w-6 animate-spin rounded-full border-2 border-slate-700 border-t-blue-400" />
-                <p className="mt-3 text-sm text-slate-300">Loading point cloud…</p>
+                <p className="mt-3 text-sm text-slate-300">
+                  {loadProgress.phase === "downloading"
+                    ? "Downloading point cloud…"
+                    : loadProgress.phase === "processing"
+                      ? "Sampling point records…"
+                      : loadProgress.phase === "preparing"
+                        ? "Preparing 3D scene…"
+                        : "Connecting to storage…"}
+                </p>
+                {loadProgress.phase === "downloading" && loadProgress.percent !== null && (
+                  <>
+                    <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
+                      <div
+                        className="h-full rounded-full bg-blue-500 transition-[width] duration-200"
+                        style={{ width: `${loadProgress.percent}%` }}
+                      />
+                    </div>
+                    <p className="mt-2 text-xs tabular-nums text-slate-500">
+                      {loadProgress.percent}%
+                    </p>
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -354,9 +395,16 @@ export default function PointCloudViewer({ pointCloud }) {
                 <div className="flex justify-between"><dt className="text-slate-500">Height</dt><dd className="text-white">{stats.size[2].toFixed(2)}</dd></div>
               </dl>
 
+              {stats.truncated && (
+                <p className="rounded-md bg-amber-400/10 p-3 text-xs leading-5 text-amber-200">
+                  The LAS header declares {stats.total.toLocaleString()} points, but the file contains
+                  {" "}{stats.available.toLocaleString()} complete records. Available data was loaded safely.
+                </p>
+              )}
+
               {stats.subsampled && (
                 <p className="rounded-md bg-amber-400/10 p-3 text-xs leading-5 text-amber-200">
-                  Showing {stats.loaded.toLocaleString()} of {stats.total.toLocaleString()} points for browser performance.
+                  Showing {stats.loaded.toLocaleString()} of {stats.available.toLocaleString()} readable points for browser performance.
                 </p>
               )}
             </div>

@@ -55,6 +55,9 @@ class LasMetadata(BaseModel):
     las_version: str
     point_count: int
     point_format: int
+    header_size: int
+    point_data_offset: int
+    point_record_length: int
     has_rgb: bool
     min_x: float
     min_y: float
@@ -140,11 +143,11 @@ def parse_las_header(
     if min_x > max_x or min_y > max_y or min_z > max_z:
         raise InvalidLasError("LAS bounding box is inverted (min > max).")
 
+    header_size = _u16(header, 94)
+    point_data_offset = _u32(header, 96)
+    if header_size < _MIN_HEADER_BYTES or point_data_offset < header_size:
+        raise InvalidLasError("LAS point data offset is invalid.")
     if file_size is not None:
-        header_size = _u16(header, 94)
-        point_data_offset = _u32(header, 96)
-        if header_size < _MIN_HEADER_BYTES or point_data_offset < header_size:
-            raise InvalidLasError("LAS point data offset is invalid.")
         expected_end = point_data_offset + point_count * point_length
         if expected_end > file_size:
             raise InvalidLasError(
@@ -155,6 +158,9 @@ def parse_las_header(
         las_version=f"{major}.{minor}",
         point_count=point_count,
         point_format=point_format,
+        header_size=header_size,
+        point_data_offset=point_data_offset,
+        point_record_length=point_length,
         has_rgb=point_format in _RGB_FORMATS,
         min_x=min_x, min_y=min_y, min_z=min_z,
         max_x=max_x, max_y=max_y, max_z=max_z,
